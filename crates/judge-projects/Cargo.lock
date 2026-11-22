@@ -112,7 +112,6 @@ name = "chrono-judge-projects"
 version = "0.1.0"
 dependencies = [
  "chrono-harness",
- "chrono-judge-filemap",
  "chrono-judge-registration",
  "chrono-judge-routes",
  "serde",
