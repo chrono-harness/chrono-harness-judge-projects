@@ -34,3 +34,4 @@ proof_bindings=(--extern "chrono_identifiers=$scratch/libchrono_identifiers.rlib
 prove verify.project-languages crates/judge-projects/src/verified_languages.rs
 prove verify.project-state crates/judge-projects/src/verified_state.rs
 prove verify.project-languages-tests crates/judge-projects-tests/tests/verified_languages.rs
+prove verify.project-state-tests crates/judge-projects-tests/tests/verified_state.rs
