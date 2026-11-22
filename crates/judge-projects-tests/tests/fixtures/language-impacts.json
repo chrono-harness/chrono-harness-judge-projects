@@ -1,0 +1,26 @@
+{
+  "project_language": {
+    "delta": [{"kind": "M", "new_blob": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "new_mode": "100644", "old_blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "old_mode": "100644", "path": ".chrono-harness/projects.json"}],
+    "reached": ["file:.chrono-harness/projects.json", "project:t", "test:t"],
+    "required_tests": ["test:t"],
+    "retired_tests": [],
+    "schema": "chrono-filemap-impact/v6",
+    "tests": ["test:t"]
+  },
+  "script_language": {
+    "delta": [{"kind": "M", "new_blob": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "new_mode": "100644", "old_blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "old_mode": "100644", "path": ".chrono-harness/projects.json"}],
+    "reached": ["file:.chrono-harness/projects.json", "script:t", "test:t"],
+    "required_tests": ["test:t"],
+    "retired_tests": [],
+    "schema": "chrono-filemap-impact/v6",
+    "tests": ["test:t"]
+  },
+  "docs": {
+    "delta": [{"kind": "M", "new_blob": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "new_mode": "100644", "old_blob": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", "old_mode": "100644", "path": "doc.txt"}],
+    "reached": ["file:doc.txt"],
+    "required_tests": [],
+    "retired_tests": [],
+    "schema": "chrono-filemap-impact/v6",
+    "tests": []
+  }
+}

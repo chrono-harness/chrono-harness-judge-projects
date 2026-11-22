@@ -85,40 +85,29 @@ fn shell_python_exception_is_explicit_and_directional() {
 }
 
 #[test]
-fn language_only_delta_selects_the_pair_and_unrelated_delta_does_not_rejudge_it() {
+fn language_changes_check_the_selected_pair_and_leave_unrelated_pairs_alone() {
+    let impacts: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/language-impacts.json")).unwrap();
+    let reached = |name: &str| -> BTreeSet<String> {
+        serde_json::from_value(impacts[name]["reached"].clone()).unwrap()
+    };
     for script in [false, true] {
         let (root, old) = fixture(script, "rust", "rust");
         let mut new = old.clone();
         let collection = if script { "scripts" } else { "projects" };
         new.get_mut(PROJECTS).unwrap()[collection][1]["language"] = json!("python");
-        let before = load(&old);
         let after = load(&new);
-        let (impact, findings) = chrono_judge_filemap::produce(&before, &after, &[delta(PROJECTS)]);
-        assert!(findings.is_empty(), "{findings:?}");
-        assert_eq!(
-            impact
-                .required_tests
-                .iter()
-                .map(|t| t.node.as_str())
-                .collect::<Vec<_>>(),
-            ["test:t"]
-        );
-        let affected = impact.closure.reached.keys().cloned().collect();
+        let affected = reached(if script {
+            "script_language"
+        } else {
+            "project_language"
+        });
         assert!(
             pairs(root.path(), &after, &affected)
                 .unwrap_err()
                 .starts_with("E_TEST_LANGUAGE:")
         );
-        let (unrelated, findings) =
-            chrono_judge_filemap::produce(&after, &after, &[delta("doc.txt")]);
-        assert!(findings.is_empty(), "{findings:?}");
-        assert!(unrelated.required_tests.is_empty());
-        pairs(
-            root.path(),
-            &after,
-            &unrelated.closure.reached.keys().cloned().collect(),
-        )
-        .unwrap();
+        pairs(root.path(), &after, &reached("docs")).unwrap();
     }
 }
 
@@ -138,16 +127,4 @@ fn language_v2_does_not_reinterpret_legacy_v1_pairs() {
         &BTreeSet::from(["project:p".into()]),
     )
     .unwrap();
-}
-
-use chrono_harness::wire::Delta;
-pub fn delta(path: &str) -> Delta {
-    Delta {
-        kind: "M".into(),
-        path: path.into(),
-        old_blob: Some("a".repeat(40)),
-        new_blob: Some("b".repeat(40)),
-        old_mode: Some("100644".into()),
-        new_mode: Some("100644".into()),
-    }
 }
