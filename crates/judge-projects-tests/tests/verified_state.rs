@@ -13,7 +13,7 @@ mod state;
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
-extern crate chrono_identifiers as identifiers;
+use vstd::contrib::exec_spec::ExecSpecEq;
 
 #[cfg(verus_keep_ghost)]
 #[path = "proof_support/judge-routes/support/tool.rs"]
@@ -87,14 +87,14 @@ fn blocked_is_terminal_without_a_process_and_unknown_receipts_stay_unknown() {
     let blocked_known = state::terminal(&blocked);
     assert(blocked_known);
     let completed = state::operation_state(&blocked);
-    let exact_completed = identifiers::equal_text(completed, "completed");
+    let exact_completed = <&str>::exec_eq(completed, "completed");
     assert(exact_completed);
     let claimed_success = state::OperationObservation { status: "passed", process_terminal: None };
     let no_receipt = state::terminal(&claimed_success);
     assert(!no_receipt);
     let returned_unknown = state::OperationObservation { status: "passed", process_terminal: Some(false) };
     let unknown = state::operation_state(&returned_unknown);
-    let exact_unknown = identifiers::equal_text(unknown, "unknown");
+    let exact_unknown = <&str>::exec_eq(unknown, "unknown");
     assert(exact_unknown);
 }
 
@@ -163,7 +163,7 @@ fn original_identity_requires_the_complete_digest_and_exact_length() {
     assert(case.is_err());
     match case {
         Err(message) => {
-            let exact = identifiers::equal_text(message, "operation original differs from the actual process result");
+            let exact = <&str>::exec_eq(message, "operation original differs from the actual process result");
             assert(exact);
         },
         Ok(()) => { assert(false); },

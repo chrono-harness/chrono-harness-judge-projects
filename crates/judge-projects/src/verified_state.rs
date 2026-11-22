@@ -2,12 +2,9 @@
 #![allow(unexpected_cfgs)]
 #[cfg(not(verus_keep_ghost))]
 use chrono_harness::verus;
+use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
-#[cfg(verus_keep_ghost)]
-extern crate chrono_identifiers as identifiers;
-#[cfg(not(verus_keep_ghost))]
-use chrono_harness::verified_identifiers as identifiers;
 
 #[cfg(verus_keep_ghost)]
 #[path = "state.rs"]
@@ -30,7 +27,7 @@ pub open spec fn operation_is_terminal(row: &OperationObservation) -> bool {
 pub fn terminal(row: &OperationObservation) -> (known: bool)
     ensures known == operation_is_terminal(row),
 {
-    identifiers::equal_text(row.status, "blocked")
+    <&str>::exec_eq(row.status, "blocked")
         || match row.process_terminal { Some(value) => value, None => false }
 }
 
@@ -61,7 +58,7 @@ pub fn all_terminal(rows: &Vec<OperationObservation>) -> (known: bool)
 pub fn can_release_compiler_files(status: &str, joined: bool, owned_output: bool) -> (release: bool)
     ensures release == (status@ == "passed"@ && joined && owned_output),
 {
-    identifiers::equal_text(status, "passed") && joined && owned_output
+    <&str>::exec_eq(status, "passed") && joined && owned_output
 }
 
 pub open spec fn original_matches(
@@ -85,7 +82,7 @@ pub fn validate_original(
     match expected {
         None => Ok(()),
         Some((wanted_digest, wanted_length)) => {
-            if identifiers::equal_text(digest, wanted_digest) && length == wanted_length { Ok(()) }
+            if <&str>::exec_eq(digest, wanted_digest) && length == wanted_length { Ok(()) }
             else { Err("operation original differs from the actual process result") }
         },
     }
