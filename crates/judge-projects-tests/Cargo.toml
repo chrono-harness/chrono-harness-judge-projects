@@ -12,6 +12,7 @@ chrono-judge-projects = { path = "../judge-projects" }
 chrono-harness = { git = "https://github.com/chrono-harness/chrono-harness-runner.git", rev = "a1cff08f74d996d618372f20adc203d1b5904d50" }
 chrono-registration-fixture = { git = "https://github.com/chrono-harness/chrono-harness-judge-registration.git", rev = "76530cce04ad04ebda2f71a16a8a51f930c2daa8" }
 tempfile = "3"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [[test]]
@@ -21,3 +22,7 @@ path = "tests/languages.rs"
 [[test]]
 name = "verified_languages"
 path = "tests/verified_languages.rs"
+
+[[test]]
+name = "impact_summary"
+path = "tests/impact_summary.rs"

@@ -1,4 +1,5 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
+mod impact;
 mod state;
 mod verified_languages;
 mod verified_state;
@@ -1747,9 +1748,20 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
     {
         return Err("E_PLAN_IDENTITY: endpoints/registry/context/inputs/run".into());
     }
-    let impact: chrono_judge_filemap::Impact =
-        serde_json::from_value(req.impact.clone()).map_err(|e| e.to_string())?;
-    let mut affected: BTreeSet<_> = impact.closure.reached.keys().cloned().collect();
+    let impact = impact::decode(
+        &req.impact,
+        &r.config()["protocol"],
+        &plan.environment,
+        |command, input| {
+            let process = chrono_harness::run_process(&req.candidate.root, command, input)?;
+            Ok((
+                process.exit_code,
+                process.stdout_bytes,
+                process.stderr_bytes,
+            ))
+        },
+    )?;
+    let mut affected = impact.reached;
     affected.extend(plan.selected.keys().cloned());
     pairs(&req.candidate.root, &r, &affected)?;
     let artifacts: Vec<_> = r.config()["artifacts"]
