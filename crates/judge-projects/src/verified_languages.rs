@@ -5,10 +5,7 @@ use chrono_harness::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
-#[cfg(verus_keep_ghost)]
-extern crate chrono_identifiers as identifiers;
-#[cfg(not(verus_keep_ghost))]
-use chrono_harness::verified_identifiers as identifiers;
+use vstd::contrib::exec_spec::ExecSpecEq;
 
 verus! {
 
@@ -19,9 +16,9 @@ pub open spec fn language_pair(implementation: Seq<char>, testing: Seq<char>) ->
 pub fn dedicated_test_language(implementation: &str, testing: &str) -> (accepted: bool)
     ensures accepted == language_pair(implementation@, testing@),
 {
-    identifiers::equal_text(implementation, testing)
-        || identifiers::equal_text(implementation, "shell")
-            && identifiers::equal_text(testing, "python")
+    <&str>::exec_eq(implementation, testing)
+        || <&str>::exec_eq(implementation, "shell")
+            && <&str>::exec_eq(testing, "python")
 }
 
 }
