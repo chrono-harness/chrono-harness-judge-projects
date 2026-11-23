@@ -16,7 +16,7 @@ mod verified_languages;
 mod verified_state;
 use chrono_harness::{
     CommandSpec, facts,
-    wire::{self, Binding, Finding, Request, Response, Status},
+    wire::{self, Finding, Request, Response, Status},
 };
 mod registration;
 pub use receipt::Receipt;
@@ -430,7 +430,11 @@ fn collect_reports(
     let units: BTreeMap<String, chrono_harness::units::Unit> =
         serde_json::from_value(req.observations["execution_units"]["units"].clone())
             .map_err(|e| format!("E_COLLECTION_INPUT: units: {e}"))?;
-    let required = chrono_harness::units::required(&units, selected);
+    let root = &req.candidate.root;
+    let mut reader =
+        runtime_session::Session::open(root, &registrations.runner(root)?, "judge-evidence-v1")?;
+    let required: Vec<String> =
+        reader.call(json!({"operation":"required-units","units":units,"selected":selected}))?;
     let manifest_path = manifest.clone();
     let report_path = req.observations["execution_units"]["report_path"]
         .as_str()
@@ -511,7 +515,7 @@ fn collect_reports(
             ));
         }
         let report = chrono_harness::json(&report_bytes)?;
-        if chrono_harness::full::report_transport_bytes(&report, report_bytes.len() as u64)?
+        if reader.call::<u64>(json!({"operation":"report-transport-bytes", "report":report,"metadata_bytes": report_bytes.len()}))?
             > report_limit
         {
             return Err(
@@ -542,6 +546,7 @@ fn collect_reports(
             }
         }
         let unit_results = validate_unit_report(
+            &mut reader,
             req,
             registrations,
             &units,
@@ -727,6 +732,7 @@ fn collect_reports(
         completion: Some(completion.clone()),
         operation_state: None,
     };
+    reader.close()?;
     Ok((results, completion))
 }
 
@@ -735,6 +741,7 @@ fn collect_reports(
 /// original coordinates; only typed endpoint and declaration projections are
 /// compared with the current collection request.
 fn validate_unit_report(
+    reader: &mut runtime_session::Session,
     req: &Request,
     registrations: &Registry,
     units: &BTreeMap<String, chrono_harness::units::Unit>,
@@ -807,9 +814,26 @@ fn validate_unit_report(
     let records = report["judges"]
         .as_array()
         .ok_or("E_COLLECTION_INPUT: judge records missing")?;
-    let bindings: Vec<Binding> = serde_json::from_value(registrations.judges()["judges"].clone())
-        .map_err(|e| e.to_string())?;
-    let parsed = chrono_harness::full::retained_judges(&top_request, &bindings, records)?;
+    #[derive(Deserialize)]
+    struct CheckedJudges {
+        request: Request,
+        status: Status,
+    }
+    let checked: CheckedJudges = reader.call(json!({
+        "operation": "retained-judges",
+        "request": &top_request,
+        "bindings": judges_cfg,
+        "records": records,
+        "judge": "routes"
+    }))?;
+    // The runner has checked each response, exit, and request identity against its original streams.
+    let parsed: BTreeMap<String, Response> = records
+        .iter()
+        .map(|record| {
+            let response = Response::deserialize(&record["response"]).map_err(|e| e.to_string())?;
+            Ok((response.judge_id.clone(), response))
+        })
+        .collect::<Result<_, String>>()?;
     let resolved = chrono_harness::retained_artifacts::resolve_map(&report["artifacts"], closure)?;
     let artifacts = &resolved;
     if registrations.config()["schema_version"] == 4 {
@@ -831,7 +855,6 @@ fn validate_unit_report(
     let supplied_view = parsed
         .get("registration")
         .ok_or("original registration")?
-        .2
         .outputs
         .get("registration_view")
         .ok_or(
@@ -864,28 +887,26 @@ fn validate_unit_report(
     {
         return Err("E_COLLECTION_INPUT: original root/run/declaration binding".into());
     }
-    let mut aggregate = Status::Pass;
+    if top_request.base.commit != req.base.commit
+        || top_request.base.tree != req.base.tree
+        || top_request.candidate.commit != req.candidate.commit
+        || top_request.candidate.tree != req.candidate.tree
+        || top_request.config_path != req.config_path
+        || top_request.registries.digest != req.registries.digest
+        || top_request.context.sha256 != req.context.sha256
+        || top_request.delta != req.delta
+        || top_request.runner.sha256 != req.runner.sha256
+        || top_request.observations["registry_bindings"] != req.observations["registry_bindings"]
+        || top_request.observations["environment"] != req.observations["environment"]
+    {
+        return Err("E_COLLECTION_INPUT: original fixed request binding differs".into());
+    }
     let mut findings = vec![];
     for record in records {
-        let (original, _, response, process) = parsed
-            .get(record["id"].as_str().ok_or("original judge id")?)
-            .ok_or("original judge")?;
-        if original.base.commit != req.base.commit
-            || original.base.tree != req.base.tree
-            || original.candidate.commit != req.candidate.commit
-            || original.candidate.tree != req.candidate.tree
-            || original.config_path != req.config_path
-            || original.registries.digest != req.registries.digest
-            || original.context.sha256 != req.context.sha256
-            || original.delta != req.delta
-            || original.runner.sha256 != req.runner.sha256
-            || original.observations["registry_bindings"] != req.observations["registry_bindings"]
-            || original.observations["environment"] != req.observations["environment"]
-        {
-            return Err("E_COLLECTION_INPUT: original fixed request binding differs".into());
-        }
-        validate_retained_response(original, response, process.exit_code)?;
-        aggregate = aggregate.maximum(response.status.clone());
+        let id = record["id"].as_str().ok_or("original judge id")?;
+        let response = parsed.get(id).ok_or("original judge")?;
+        // Every reconstructed request uses the retained template's DELTA.
+        validate_retained_response(&top_request, response)?;
         findings.extend(
             response
                 .findings
@@ -904,7 +925,7 @@ fn validate_unit_report(
             }
         }
     }
-    if report["status"] != serde_json::to_value(&aggregate).unwrap()
+    if report["status"] != serde_json::to_value(&checked.status).unwrap()
         || report["findings"] != json!(findings)
     {
         return Err("E_COLLECTION_INPUT: report summary differs from actual judges".into());
@@ -914,7 +935,6 @@ fn validate_unit_report(
         .ok_or("E_COLLECTION_INPUT: routes judge missing")?;
     let route_plan: Execution = serde_json::from_value(
         route
-            .2
             .outputs
             .get("execution_plan")
             .ok_or("E_COLLECTION_INPUT: routes judge missing required output execution_plan")?
@@ -930,14 +950,13 @@ fn validate_unit_report(
     let filemap = parsed
         .get("filemap")
         .ok_or("E_COLLECTION_INPUT: filemap judge missing")?;
-    if filemap.2.outputs.get("impact") != Some(&req.impact) || route.0.impact != req.impact {
+    if filemap.outputs.get("impact") != Some(&req.impact) || checked.request.impact != req.impact {
         return Err("E_COLLECTION_INPUT: original global provenance differs".into());
     }
     let workflow = parsed
         .get("workflow")
         .ok_or("E_COLLECTION_INPUT: workflow judge missing")?;
     let verdict = workflow
-        .2
         .outputs
         .get("workflow")
         .ok_or("E_COLLECTION_INPUT: contribution verdict missing")?;
@@ -952,7 +971,6 @@ fn validate_unit_report(
         .get("projects")
         .ok_or("E_COLLECTION_INPUT: projects judge missing")?;
     let original_tests = projects
-        .2
         .outputs
         .get("tests")
         .ok_or("E_COLLECTION_INPUT: projects judge missing required output tests")?;
@@ -967,12 +985,12 @@ fn validate_unit_report(
             )
         })
         .collect();
-    let declared=routes.query("unit-declarations-v1", &json!({"request":route.0,"effective_inputs":effective,
+    let declared=routes.query("unit-declarations-v1", &json!({"request":checked.request,"effective_inputs":effective,
         "filemap":&registrations.filemap,"projects":&registrations.projects(),"test_operations":operations,"global":selected,"unit":owned}))?;
-    if declared["request_id"] != route.0.request_id
+    if declared["request_id"] != checked.request.request_id
         || route_plan.binding != declared["binding"]
-        || route.2.outputs.get("effective_inputs") != Some(&effective)
-        || route.2.outputs.get("global_selected") != Some(&json!(selected))
+        || route.outputs.get("effective_inputs") != Some(&effective)
+        || route.outputs.get("global_selected") != Some(&json!(selected))
         || report["effective_inputs"] != effective
         || &report["tests"] != original_tests
     {
@@ -985,7 +1003,7 @@ fn validate_unit_report(
         declaration_root,
         &routes,
     )?;
-    if route.2.outputs.get("global_graph") != declared.get("global_graph")
+    if route.outputs.get("global_graph") != declared.get("global_graph")
         || declared.get("global_graph").is_none()
     {
         return Err("E_COLLECTION_INPUT: original global graph differs".into());
@@ -1003,10 +1021,12 @@ fn validate_unit_report(
             "E_COLLECTION_INPUT: unit plan differs from declarations: {unit}"
         ));
     }
-    if route_plan.root != route.0.candidate.root
+    if route_plan.root != checked.request.candidate.root
         || route_plan.environment
-            != serde_json::from_value(route.0.observations["environment"]["effective"].clone())
-                .map_err(|e| e.to_string())?
+            != serde_json::from_value(
+                checked.request.observations["environment"]["effective"].clone(),
+            )
+            .map_err(|e| e.to_string())?
     {
         return Err(format!(
             "E_COLLECTION_INPUT: unit plan binding differs: {unit}"
@@ -1314,7 +1334,13 @@ fn verify_completion(
         serde_json::from_value(req.observations["execution_units"]["units"].clone())
             .map_err(|e| e.to_string())?;
     let selected: BTreeSet<_> = plan.selected.keys().cloned().collect();
-    let required = chrono_harness::units::required(&units, &selected);
+    let mut reader = runtime_session::Session::open(
+        declaration_root,
+        &r.runner(declaration_root)?,
+        "judge-evidence-v1",
+    )?;
+    let required: Vec<String> =
+        reader.call(json!({"operation":"required-units","units":units,"selected":selected}))?;
     let mut seen = BTreeSet::new();
     let mut tests = BTreeMap::new();
     let mut removed = BTreeMap::<String, Option<String>>::new();
@@ -1438,7 +1464,7 @@ fn verify_completion(
             return Err("E_COLLECTION_INPUT: original source bytes/address".into());
         }
         let report = chrono_harness::json(&bytes)?;
-        if chrono_harness::full::report_transport_bytes(&report, bytes.len() as u64)? > limit {
+        if reader.call::<u64>(json!({"operation":"report-transport-bytes", "report":report,"metadata_bytes": bytes.len()}))? > limit {
             return Err("original report metadata and streams exceed registered bound".into());
         }
         if source["runner_sha256"] != req.runner.sha256
@@ -1454,6 +1480,7 @@ fn verify_completion(
             }
         }
         let verified = validate_unit_report(
+            &mut reader,
             req,
             r,
             &units,
@@ -1526,17 +1553,11 @@ fn verify_completion(
     {
         return Err("E_COLLECTION_INPUT: completed original coverage/tools differ".into());
     }
+    reader.close()?;
     Ok(())
 }
 
-fn validate_retained_response(req: &Request, response: &Response, exit: i32) -> Result<(), String> {
-    if response.protocol != wire::PROTOCOL
-        || response.request_id != req.request_id
-        || response.judge_id != req.judge_id
-        || response.status.exit_code() != exit
-    {
-        return Err("E_COLLECTION_INPUT: response identity/status/exit mismatch".into());
-    }
+fn validate_retained_response(req: &Request, response: &Response) -> Result<(), String> {
     for finding in &response.findings {
         if finding.code.is_empty()
             || finding.message.is_empty()
