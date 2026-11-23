@@ -1,7 +1,7 @@
 //! Execution originals belong to projects; retention only protects their lifetime.
 #![allow(unexpected_cfgs)]
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::verus;
+use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
