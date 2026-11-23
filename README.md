@@ -16,3 +16,5 @@
 
 - `read-results-v1` 读取项目执行结果，输出 `results` 和 `passed`。前者使用项目判官原生序列化后的字段和默认值，供检查工作流凭证摘要时使用。
 - `check-collection-v1` 在当前候选检出根运行。输入含 `request`、`effective_inputs`、`plan` 和 `results`。验证历史收集时，另传 `retained` 对象，其中的 `request` 和 `artifacts` 来自生产者报告。核验成功后退出 0，标准输出为空。
+
+项目执行方通过宿主安装的 `chrono-judge-routes` 校验执行计划、核对原生执行回执，并在收集时重放声明。宿主可在 tools 中显式选择 routes 程序，或在 judges 中登记执行路径及 SHA-256。其余宿主使用有效 PATH 中的安装。业务子进程、并发调度和输出原件由 projects 持有。projects 在原执行目录记录编译器依赖文件和库的身份，发布回执后按本仓生命周期回收原件。单元收集按贡献者的原坐标核对回执，在收集检出调用已安装的判官。

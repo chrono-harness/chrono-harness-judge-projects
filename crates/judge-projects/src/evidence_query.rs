@@ -1,7 +1,7 @@
 //! Read the public project execution results or verify a retained collection.
+use crate::routes::Execution;
 use crate::{Results, validate_retained_request_at, verify_completion};
 use chrono_harness::{facts, wire::Request};
-use chrono_judge_routes::Execution;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{io::Read, path::Path};

@@ -1,7 +1,10 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
+mod compiler;
 pub mod evidence_query;
 mod impact;
 mod pair_checks;
+mod receipt;
+mod routes;
 mod state;
 mod verified_languages;
 mod verified_state;
@@ -10,7 +13,8 @@ use chrono_harness::{
     wire::{self, Binding, Finding, Request, Response, Status},
 };
 use chrono_judge_registration::Registrations;
-use chrono_judge_routes::{Execution, Receipt};
+use receipt::Receipt;
+use routes::{Execution, Routes};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -67,9 +71,8 @@ impl Results {
             && self.tests.values().all(|s| s == "passed")
     }
 }
-/// Shared by full projects and the explicitly scoped CI adapter; no alternate process engine.
-pub fn execute(plan: &Execution) -> Result<Results, String> {
-    plan.validate()?;
+/// Execute a plan admitted by the installed routes judge.
+fn execute(plan: &Execution, routes: &Routes) -> Result<Results, String> {
     let state = state::Run::begin(plan)?;
     let plan_original = &state.plan_original;
     let span = tracing::info_span!("projects.execution", plan = plan.identity);
@@ -183,7 +186,7 @@ pub fn execute(plan: &Execution) -> Result<Results, String> {
                             "operation worker started"
                         );
                         let row = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_operation(plan, index, plan_original)
+                            execute_operation(plan, index, plan_original, routes)
                         }))
                         .unwrap_or_else(|_| OperationResult {
                             operation: op.method.operation.clone(),
@@ -265,7 +268,12 @@ pub fn execute(plan: &Execution) -> Result<Results, String> {
     state.finish(&mut results)?;
     Ok(results)
 }
-fn execute_operation(plan: &Execution, index: usize, plan_original: &Value) -> OperationResult {
+fn execute_operation(
+    plan: &Execution,
+    index: usize,
+    plan_original: &Value,
+    routes: &Routes,
+) -> OperationResult {
     let op = &plan.operations[index];
     let mut state = None;
     let result = (|| {
@@ -288,11 +296,12 @@ fn execute_operation(plan: &Execution, index: usize, plan_original: &Value) -> O
             &tool.sha256,
             &state.as_ref().unwrap().evidence(),
         )?;
-        Receipt::new(plan, op, process)
+        Receipt::observe(plan, op, process)
     })();
     let (receipt, error, status) = match result {
         Ok(receipt) => {
-            let infrastructure = chrono_judge_routes::compare(plan, op, Some(&receipt))
+            let infrastructure = routes
+                .check_receipt(plan, &receipt)
                 .err()
                 .or_else(|| receipt.process.failure.clone());
             let (error, status) = if let Some(error) = infrastructure {
@@ -940,7 +949,12 @@ fn validate_unit_report(
             .clone(),
     )
     .map_err(|e| format!("E_COLLECTION_INPUT: unit plan: {e}"))?;
-    route_plan.validate()?;
+    let routes = Routes::new(
+        declaration_root,
+        registrations,
+        &req.observations["environment"]["effective"],
+    )?;
+    routes.check(&route_plan)?;
     let filemap = parsed
         .get("filemap")
         .ok_or("E_COLLECTION_INPUT: filemap judge missing")?;
@@ -970,7 +984,16 @@ fn validate_unit_report(
         .outputs
         .get("tests")
         .ok_or("E_COLLECTION_INPUT: projects judge missing required output tests")?;
-    if route_plan.binding != chrono_judge_routes::binding(&route.0, &effective)
+    let owned = chrono_harness::units::select(units, selected, unit)?;
+    let operations: BTreeMap<_, Vec<_>> = registrations
+        .test_bindings()
+        .into_iter()
+        .map(|(id, bindings)| (id, bindings.into_iter().map(|b| b.operation).collect()))
+        .collect();
+    let declared=routes.query("unit-declarations-v1", &json!({"request":route.0,"effective_inputs":effective,
+        "filemap":registrations.filemap(),"projects":registrations.projects(),"test_operations":operations,"global":selected,"unit":owned}))?;
+    if declared["request_id"] != route.0.request_id
+        || route_plan.binding != declared["binding"]
         || route.2.outputs.get("effective_inputs") != Some(&effective)
         || route.2.outputs.get("global_selected") != Some(&json!(selected))
         || report["effective_inputs"] != effective
@@ -978,25 +1001,17 @@ fn validate_unit_report(
     {
         return Err("E_COLLECTION_INPUT: original plan/input/global binding".into());
     }
-    validate_declared_tools(&route_plan, registrations, &effective, declaration_root)?;
-    let owned = chrono_harness::units::select(units, selected, unit)?;
-    let plans = chrono_judge_registration::execution::plans(registrations.filemap())?;
-    let methods = chrono_judge_registration::execution::methods(registrations.projects())?;
-    let actions = chrono_judge_routes::execute_actions(registrations);
-    let (global_chosen, global_operations) =
-        chrono_judge_routes::order(selected, &plans, &methods, &actions)?;
-    if route.2.outputs.get("global_graph")
-        != Some(
-            &json!({"schema":"chrono-global-operation-graph/v1","selected":global_chosen,"operations":global_operations}),
-        )
+    validate_declared_tools(
+        &route_plan,
+        registrations,
+        &effective,
+        declaration_root,
+        &routes,
+    )?;
+    if route.2.outputs.get("global_graph") != declared.get("global_graph")
+        || declared.get("global_graph").is_none()
     {
         return Err("E_COLLECTION_INPUT: original global graph differs".into());
-    }
-    let (expected_selected, mut expected_operations) =
-        chrono_judge_routes::order(&owned, &plans, &methods, &actions)?;
-    for operation in &mut expected_operations {
-        operation.method.argv =
-            chrono_judge_routes::expand(&operation.method.argv, &route_plan.binding);
     }
     if route_plan.scheduling
         != chrono_judge_registration::execution::scheduling(
@@ -1004,9 +1019,8 @@ fn validate_unit_report(
             registrations.projects(),
             &registrations.config()["artifacts"],
         )?
-        || route_plan.selected != expected_selected
-        || serde_json::to_value(&route_plan.operations).unwrap()
-            != serde_json::to_value(&expected_operations).unwrap()
+        || json!(route_plan.selected) != declared["selected"]
+        || json!(route_plan.operations) != declared["operations"]
     {
         return Err(format!(
             "E_COLLECTION_INPUT: unit plan differs from declarations: {unit}"
@@ -1052,6 +1066,18 @@ fn validate_unit_report(
     if results.removed != expected_removed {
         return Err("E_COLLECTION_INPUT: original removal obligations differ".into());
     }
+    let receipts: BTreeMap<_, _> = results
+        .executed
+        .iter()
+        .filter_map(|r| r.receipt.as_ref().map(|receipt| (&r.operation, receipt)))
+        .collect();
+    let checked = routes.query(
+        "check-plan-receipts-v1",
+        &json!({"plan":route_plan,"receipts":receipts}),
+    )?;
+    if checked["plan"] != route_plan.identity {
+        return Err("E_COLLECTION_INPUT: routes receipt plan differs".into());
+    }
     for operation in &route_plan.operations {
         let rows: Vec<_> = results
             .executed
@@ -1061,12 +1087,11 @@ fn validate_unit_report(
         if rows.len() != 1
             || rows[0].status != "passed"
             || rows[0].error.is_some()
-            || chrono_judge_routes::compare(&route_plan, operation, rows[0].receipt.as_ref())
-                .is_err()
+            || checked["operations"].get(&operation.method.operation) != Some(&Value::Null)
             || rows[0]
                 .receipt
                 .as_ref()
-                .is_none_or(|r| chrono_judge_routes::process_success(&r.process).is_err())
+                .is_none_or(|r| chrono_harness::observation::process_success(&r.process).is_err())
         {
             return Err(format!(
                 "E_COLLECTION_INPUT: receipt differs: {unit}/{}",
@@ -1197,6 +1222,7 @@ fn validate_declared_tools(
     r: &Registrations,
     effective: &Value,
     current_root: &Path,
+    routes: &Routes,
 ) -> Result<(), String> {
     let expected: BTreeSet<_> = plan
         .operations
@@ -1220,14 +1246,11 @@ fn validate_declared_tools(
         let program = d["program"].as_str().ok_or("tool program")?;
         let argv: Vec<String> =
             serde_json::from_value(d["version_argv"].clone()).map_err(|e| e.to_string())?;
-        chrono_judge_routes::validate_retained_tool(
-            tool,
-            program,
-            &argv,
-            &plan.environment,
-            &plan.root,
-            d["expected_version"].as_str(),
-        )?;
+        let checked = routes.query("retained-tool-v1",&json!({"tool":tool,"program":program,"version_argv":argv,
+            "environment":plan.environment,"root":plan.root,"expected_version":d["expected_version"]}))?;
+        if checked["sha256"] != tool.sha256 {
+            return Err("E_TOOL_BINDING: retained routes tool identity differs".into());
+        }
         let declared_path = Path::new(program);
         if (declared_path.is_absolute() || program.contains('/'))
             && plan.root.join(declared_path) != tool.path
@@ -1610,9 +1633,13 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
         return Err("E_ROUTE_MISSING: checked execution plan".into());
     }
     let plan: Execution = serde_json::from_value(plans[0].clone()).map_err(|e| e.to_string())?;
-    plan.validate()?;
-    if plan.binding != chrono_judge_routes::binding(req, &inputs) || plan.root != req.candidate.root
-    {
+    let routes = Routes::new(
+        &req.candidate.root,
+        &r,
+        &req.observations["environment"]["effective"],
+    )?;
+    routes.check(&plan)?;
+    if plan.binding != routes.binding(req, &inputs)? || plan.root != req.candidate.root {
         return Err("E_PLAN_IDENTITY: endpoints/registry/context/inputs/run".into());
     }
     let impact = impact::decode(
@@ -1687,7 +1714,7 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
         &artifacts,
         reader,
     )?;
-    let mut results = execute(&plan)?;
+    let mut results = execute(&plan, &routes)?;
     if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
     }
