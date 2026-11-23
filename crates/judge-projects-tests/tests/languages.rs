@@ -162,7 +162,13 @@ fn scoped_query_checks_only_the_affected_owner_pairs() {
         let registry = &case.registry;
         let query = |owners: &[&str]| {
             let request = json!({"registry":registry, "owners":owners});
-            chrono_judge_projects::check_pairs(serde_json::to_vec(&request).unwrap().as_slice())
+            chrono_judge_projects::check_pairs_with(
+                serde_json::to_vec(&request).unwrap().as_slice(),
+                |original| {
+                    assert_eq!(original, registry);
+                    Ok(())
+                },
+            )
         };
         query(&[]).unwrap();
         let error = query(&[owner]).unwrap_err();

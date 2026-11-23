@@ -36,12 +36,12 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
         return Err("collection declaration root differs from current checkout".into());
     }
     let reader = facts::Reader::for_request(current)?;
-    let (old, registrations, _) = chrono_judge_registration::views_with_reader(current, &reader)?;
+    let registrations =
+        crate::registration::views(current, &reader, &mut Default::default(), false)?;
     let (request, artifacts) = if let Some(retained) = &query.retained {
         let original = &retained.request;
         let observed = validate_retained_request_at(
             original,
-            &old,
             &registrations,
             &retained.artifacts,
             root,
@@ -63,7 +63,6 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
     verify_completion(
         request,
         &registrations,
-        &old,
         &query.effective_inputs,
         &query.plan,
         &query.results,
