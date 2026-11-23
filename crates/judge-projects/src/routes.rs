@@ -158,25 +158,45 @@ impl<'a> Routes<'a> {
     pub fn check_receipt(
         &self,
         plan: &Execution,
+        operation: &Operation,
         receipt: &crate::receipt::Receipt,
     ) -> Result<(), String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Reply {
+            plan: String,
+            operation: String,
+            error: Value,
+        }
         #[derive(Serialize)]
-        struct Records<'a> {
-            plan: &'a Execution,
-            receipts: BTreeMap<&'a str, &'a crate::receipt::Receipt>,
+        struct Original<'a> {
+            plan: &'a str,
+            root: &'a Path,
+            environment: &'a BTreeMap<String, String>,
+            operation: &'a Operation,
+            tool: Option<&'a Tool>,
+            receipt: &'a crate::receipt::Receipt,
         }
-        let originals = Records {
-            plan,
-            receipts: BTreeMap::from([(receipt.operation.as_str(), receipt)]),
+        let original = Original {
+            plan: &plan.identity,
+            root: &plan.root,
+            environment: &plan.environment,
+            operation,
+            tool: plan.tools.get(&operation.method.tool),
+            receipt,
         };
-        let reply = self.query("check-plan-receipts-v1", &originals)?;
-        if reply["plan"] != plan.identity {
-            return Err("E_RECEIPT_MISMATCH: routes response refers to another plan".into());
+        let reply: Reply =
+            serde_json::from_value(self.query("check-operation-receipt-v1", &original)?)
+                .map_err(|error| error.to_string())?;
+        if reply.plan != plan.identity || reply.operation != operation.method.operation {
+            return Err(
+                "E_RECEIPT_MISMATCH: routes response refers to another plan or operation".into(),
+            );
         }
-        match reply["operations"].get(&receipt.operation) {
-            Some(Value::Null) => Ok(()),
-            Some(Value::String(reason)) => Err(reason.clone()),
-            _ => Err("E_RECEIPT_MISMATCH: routes did not check the operation".into()),
+        match reply.error {
+            Value::Null => Ok(()),
+            Value::String(reason) => Err(reason),
+            _ => Err("E_RECEIPT_MISMATCH: invalid receipt comparison".into()),
         }
     }
     pub fn binding(

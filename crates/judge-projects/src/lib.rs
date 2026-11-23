@@ -304,7 +304,7 @@ fn execute_operation(
     let (receipt, error, status) = match result {
         Ok(receipt) => {
             let infrastructure = routes
-                .check_receipt(plan, &receipt)
+                .check_receipt(plan, op, &receipt)
                 .err()
                 .or_else(|| receipt.process.failure.clone());
             let (error, status) = if let Some(error) = infrastructure {
