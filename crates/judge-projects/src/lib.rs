@@ -9,11 +9,12 @@ mod pair_checks;
 pub mod plan_trace;
 mod receipt;
 mod routes;
+mod runtime_session;
 mod state;
 mod verified_languages;
 mod verified_state;
 use chrono_harness::{
-    CommandSpec, facts, run_process_observed_retained,
+    CommandSpec, facts,
     wire::{self, Binding, Finding, Request, Response, Status},
 };
 mod registration;
@@ -77,8 +78,13 @@ impl Results {
     }
 }
 /// Execute a plan admitted by the installed routes judge.
-fn execute(plan: &Execution, routes: &Routes, dispatch: &Dispatch) -> Result<Results, String> {
-    let state = state::Run::begin(plan)?;
+fn execute(
+    plan: &Execution,
+    routes: &Routes,
+    dispatch: &Dispatch,
+    runner: &Path,
+) -> Result<Results, String> {
+    let state = state::Run::begin(plan, runner)?;
     let plan_original = &state.plan_original;
     let span = tracing::info_span!("projects.execution", plan = plan.identity);
     let _entered = span.enter();
@@ -170,7 +176,7 @@ fn execute(plan: &Execution, routes: &Routes, dispatch: &Dispatch) -> Result<Res
                             "operation worker started"
                         );
                         let row = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_operation(plan, index, plan_original, routes)
+                            execute_operation(plan, index, plan_original, routes, runner)
                         }))
                         .unwrap_or_else(|_| OperationResult {
                             operation: op.method.operation.clone(),
@@ -257,6 +263,7 @@ fn execute_operation(
     index: usize,
     plan_original: &Value,
     routes: &Routes,
+    runner: &Path,
 ) -> OperationResult {
     let op = &plan.operations[index];
     let mut state = None;
@@ -272,14 +279,8 @@ fn execute_operation(
             timeout_seconds: op.timeout_seconds,
             output_limit_bytes: op.output_limit_bytes,
         };
-        state = Some(state::Operation::begin(plan, index, plan_original)?);
-        let process = run_process_observed_retained(
-            &plan.root,
-            &spec,
-            &[],
-            &tool.sha256,
-            &state.as_ref().unwrap().evidence(),
-        )?;
+        state = Some(state::Operation::begin(plan, index, plan_original, runner)?);
+        let process = state.as_ref().unwrap().execute(&spec, &tool.sha256)?;
         Receipt::observe(plan, op, process)
     })();
     let (receipt, error, status) = match result {
@@ -1705,7 +1706,8 @@ fn evaluate(
         return Ok(());
     };
     snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
-    let mut results = execute(&plan, &routes, &dispatch)?;
+    let runner = chrono_harness::resolve_program(&plan.root, &req.runner.path, None)?;
+    let mut results = execute(&plan, &routes, &dispatch, &runner)?;
     if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
     }

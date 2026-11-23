@@ -45,7 +45,8 @@ pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result
     )?;
     let work = || {
         let dispatch = routes.dispatch(&query.plan)?;
-        execute(&query.plan, &routes, &dispatch)
+        let runner = chrono_harness::resolve_program(root, "chrono-harness", None)?;
+        execute(&query.plan, &routes, &dispatch, &runner)
     };
     let (results, diagnostic_error) = if let Some(level) = query.diagnostics {
         let level: LevelFilter = level
