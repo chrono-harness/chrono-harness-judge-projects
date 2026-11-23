@@ -15,8 +15,9 @@ use chrono_harness::{
     CommandSpec, facts, run_process_observed_retained,
     wire::{self, Binding, Finding, Request, Response, Status},
 };
-use chrono_judge_registration::Registrations;
+mod registration;
 pub use receipt::Receipt;
+use registration::Registry;
 use routes::{Dispatch, Execution, Routes};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -137,10 +138,8 @@ fn execute(plan: &Execution, routes: &Routes, dispatch: &Dispatch) -> Result<Res
                     || op.predecessors.iter().any(|id| !statuses.contains_key(id))
                     || plan.scheduling.as_ref().is_some_and(|policy| {
                         running.iter().any(|i: &usize| {
-                            policy.conflicts(
-                                &op.method.operation,
-                                &plan.operations[*i].method.operation,
-                            )
+                            policy.claims[&op.method.operation]
+                                .overlaps(&policy.claims[&plan.operations[*i].method.operation])
                         })
                     })
                 {
@@ -328,19 +327,25 @@ fn execute_operation(
 }
 /// Validate the caller's affected pairs in a fixed project registry.
 pub fn check_pairs(input: impl std::io::Read) -> Result<(), String> {
+    check_pairs_with(input, |registry| {
+        let root = std::env::current_dir().map_err(|e| e.to_string())?;
+        registration::standalone(&root, registry)
+    })
+}
+
+pub fn check_pairs_with(
+    input: impl std::io::Read,
+    validate: impl FnOnce(&Value) -> Result<(), String>,
+) -> Result<(), String> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
     struct Query {
         registry: Value,
         owners: BTreeSet<String>,
     }
-    let query: Query = serde_json::from_reader(input).map_err(|error| error.to_string())?;
-    pair_declarations(&query.registry, &query.owners)
-}
-
-/// Check only affected explicit owner pairs; filesystem and output isolation stay in `pairs`.
-pub fn pair_declarations(registry: &Value, owners: &BTreeSet<String>) -> Result<(), String> {
-    chrono_judge_registration::validate_projects(registry)?;
+    let Query { registry, owners } =
+        serde_json::from_reader(input).map_err(|error| error.to_string())?;
+    validate(&registry)?;
     for (key, prefix, test_field) in [
         ("projects", "project", "test_project"),
         ("scripts", "script", "test_script"),
@@ -349,18 +354,16 @@ pub fn pair_declarations(registry: &Value, owners: &BTreeSet<String>) -> Result<
         for row in collection {
             let id = row["id"].as_str().unwrap();
             if owners.contains(&format!("{prefix}:{id}")) {
-                pair_checks::dedicated_pair(registry, collection, prefix, test_field, row)?;
+                pair_checks::dedicated_pair(&registry, collection, prefix, test_field, row)?;
             }
         }
     }
     Ok(())
 }
 
-pub fn pairs(root: &Path, r: &Registrations, affected: &BTreeSet<String>) -> Result<(), String> {
-    let nodes = r.node_data();
-    let bindings = r.test_bindings();
+fn pairs(root: &Path, r: &Registry, affected: &BTreeSet<String>) -> Result<(), String> {
     let mut tests_for_owner: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for (test, rows) in &bindings {
+    for (test, rows) in &r.bindings {
         for row in rows {
             tests_for_owner.entry(&row.owner).or_default().push(test);
         }
@@ -368,14 +371,14 @@ pub fn pairs(root: &Path, r: &Registrations, affected: &BTreeSet<String>) -> Res
     pair_checks::check(
         root,
         r.projects(),
-        r.filemap(),
+        &r.filemap,
         r.config()["artifacts"].as_array().unwrap(),
         affected,
         |node| {
-            nodes
+            r.definitions
                 .get(node)
                 .into_iter()
-                .flat_map(|node| node.definitions.iter().map(|d| d.identity.as_str()))
+                .flat_map(|node| node.iter().map(String::as_str))
                 .collect()
         },
         &tests_for_owner,
@@ -413,8 +416,7 @@ fn collect_reports(
     req: &Request,
     plan: &Execution,
     selected: &BTreeSet<String>,
-    registrations: &Registrations,
-    old: &Registrations,
+    registrations: &Registry,
     effective: &Value,
 ) -> Result<(Results, CollectedCompletion), String> {
     let _read_scope =
@@ -547,7 +549,6 @@ fn collect_reports(
             &input.unit,
             &report,
             &plan,
-            old,
             effective,
             &req.candidate.root,
             input.artifacts.as_ref(),
@@ -672,8 +673,8 @@ fn collect_reports(
             ));
         }
     }
-    let requests = chrono_judge_registration::retirement_requests(registrations)?;
-    let deferred = chrono_judge_registration::downstream_validator(registrations, &req.judge_id);
+    let requests = registrations.retirements.as_ref().map_err(Clone::clone)?;
+    let deferred = registrations.downstream;
     for retired in req.impact["retired_tests"]
         .as_array()
         .into_iter()
@@ -734,14 +735,13 @@ fn collect_reports(
 /// compared with the current collection request.
 fn validate_unit_report(
     req: &Request,
-    registrations: &Registrations,
+    registrations: &Registry,
     units: &BTreeMap<String, chrono_harness::units::Unit>,
     selected: &BTreeSet<String>,
     required: &[String],
     unit: &str,
     report: &Value,
     global_plan: &Execution,
-    old: &Registrations,
     current_effective: &Value,
     declaration_root: &Path,
     transport: Option<&chrono_harness::prepared::ArtifactTransport>,
@@ -822,49 +822,36 @@ fn validate_unit_report(
 
     let effective = validate_retained_request_at(
         &top_request,
-        old,
         registrations,
         artifacts,
         declaration_root,
         transport,
     )?;
-    let reader = facts::Reader::for_config(declaration_root, &top_request.config_path)?;
-    chrono_judge_registration::validate_retained_view(
-        &top_request,
-        &reader,
-        declaration_root,
-        parsed
-            .get("registration")
-            .ok_or("original registration")?
-            .2
-            .outputs
-            .get("registration_view")
-            .ok_or(
-                "E_COLLECTION_INPUT: registration judge missing required output registration_view",
-            )?,
-    )?;
-    if effective
-        != chrono_judge_registration::inputs::project_effective(
-            current_effective,
-            old,
-            registrations,
-            top_request.scope.as_ref(),
-        )?
-    {
+    let supplied_view = parsed
+        .get("registration")
+        .ok_or("original registration")?
+        .2
+        .outputs
+        .get("registration_view")
+        .ok_or(
+            "E_COLLECTION_INPUT: registration judge missing required output registration_view",
+        )?;
+    if effective != registrations.evidence(declaration_root,&top_request,json!({"mode":"unit","supplied_view":supplied_view,"effective_inputs":current_effective}))? {
         return Err(
             "E_COLLECTION_INPUT: original effective inputs differ from current obligations".into(),
         );
     }
+    let artifact_dirs = facts::artifact_directories(registrations.config())?;
     if top_request.observations["execution_units"] != req.observations["execution_units"]
         || top_request.registries.base != top_request.base.root.join(".chrono-harness")
         || top_request.registries.candidate != top_request.candidate.root.join(".chrono-harness")
         || top_request.checkout.head != top_request.candidate.commit
         || !top_request.checkout.tracked.is_empty()
-        || !chrono_judge_registration::nonartifact_paths(
-            registrations.config(),
-            &top_request.checkout.untracked,
-        )
-        .is_empty()
+        || top_request
+            .checkout
+            .untracked
+            .iter()
+            .any(|path| !artifact_dirs.iter().any(|dir| path.starts_with(dir)))
         || top_request.checkout.index_flags.iter().any(|flag| {
             flag.tag.is_empty()
                 || flag.tag.as_bytes()[0].is_ascii_lowercase()
@@ -970,12 +957,17 @@ fn validate_unit_report(
         .ok_or("E_COLLECTION_INPUT: projects judge missing required output tests")?;
     let owned = chrono_harness::units::select(units, selected, unit)?;
     let operations: BTreeMap<_, Vec<_>> = registrations
-        .test_bindings()
-        .into_iter()
-        .map(|(id, bindings)| (id, bindings.into_iter().map(|b| b.operation).collect()))
+        .bindings
+        .iter()
+        .map(|(id, bindings)| {
+            (
+                id.clone(),
+                bindings.iter().map(|b| b.operation.clone()).collect(),
+            )
+        })
         .collect();
     let declared=routes.query("unit-declarations-v1", &json!({"request":route.0,"effective_inputs":effective,
-        "filemap":registrations.filemap(),"projects":registrations.projects(),"test_operations":operations,"global":selected,"unit":owned}))?;
+        "filemap":&registrations.filemap,"projects":&registrations.projects(),"test_operations":operations,"global":selected,"unit":owned}))?;
     if declared["request_id"] != route.0.request_id
         || route_plan.binding != declared["binding"]
         || route.2.outputs.get("effective_inputs") != Some(&effective)
@@ -998,11 +990,11 @@ fn validate_unit_report(
         return Err("E_COLLECTION_INPUT: original global graph differs".into());
     }
     if route_plan.scheduling
-        != chrono_judge_registration::execution::scheduling(
-            registrations.filemap(),
-            registrations.projects(),
-            &registrations.config()["artifacts"],
-        )?
+        != registrations
+            .scheduling
+            .as_ref()
+            .map_err(Clone::clone)?
+            .clone()
         || json!(route_plan.selected) != declared["selected"]
         || json!(route_plan.operations) != declared["operations"]
     {
@@ -1034,7 +1026,7 @@ fn validate_unit_report(
             "E_COLLECTION_INPUT: unit contribution is incomplete: {unit}"
         ));
     }
-    let requests = chrono_judge_registration::retirement_requests(registrations)?;
+    let requests = registrations.retirements.as_ref().map_err(Clone::clone)?;
     let expected_removed: BTreeMap<String, Option<String>> = req.impact["retired_tests"]
         .as_array()
         .into_iter()
@@ -1117,10 +1109,9 @@ fn validate_unit_report(
 
 /// Validate the transported original context and declared input closure for
 /// both contributions and their finalized collector proof.
-pub fn validate_retained_request_at(
+fn validate_retained_request_at(
     req: &Request,
-    old: &Registrations,
-    r: &Registrations,
+    r: &Registry,
     artifacts: &Value,
     root: &Path,
     transport: Option<&chrono_harness::prepared::ArtifactTransport>,
@@ -1163,9 +1154,13 @@ pub fn validate_retained_request_at(
         }
     }
     validate_original_entry(req, r)?;
-    chrono_judge_registration::inputs::validate_retained_at(req, old, r, artifacts, root, transport)
+    r.evidence(
+        root,
+        req,
+        json!({"mode":"retained","artifacts":artifacts,"transport":transport}),
+    )
 }
-fn validate_original_entry(req: &Request, r: &Registrations) -> Result<(), String> {
+fn validate_original_entry(req: &Request, r: &Registry) -> Result<(), String> {
     let mut expected: Vec<String> =
         serde_json::from_value(r.config()["canonical_check"]["argv"].clone())
             .map_err(|e| e.to_string())?;
@@ -1203,7 +1198,7 @@ fn validate_original_entry(req: &Request, r: &Registrations) -> Result<(), Strin
 }
 fn validate_declared_tools(
     plan: &Execution,
-    r: &Registrations,
+    r: &Registry,
     effective: &Value,
     current_root: &Path,
     routes: &Routes,
@@ -1251,7 +1246,7 @@ fn validate_declared_tools(
             .ok()
             .and_then(|p| p.to_str())
             .is_some_and(|p| {
-                r.filemap()["files"]
+                r.filemap["files"]
                     .as_array()
                     .unwrap()
                     .iter()
@@ -1299,10 +1294,9 @@ fn unit_tools(report: &Value) -> Result<Value, String> {
     Ok(Value::Object(tools))
 }
 /// Revalidate the original source closure for every complete consumer, without historical execution.
-pub fn verify_completion(
+fn verify_completion(
     req: &Request,
-    r: &Registrations,
-    old: &Registrations,
+    r: &Registry,
     effective: &Value,
     plan: &Execution,
     results: &Results,
@@ -1467,7 +1461,6 @@ pub fn verify_completion(
             unit,
             &report,
             plan,
-            old,
             effective,
             declaration_root,
             None,
@@ -1496,7 +1489,7 @@ pub fn verify_completion(
             }
         }
     }
-    let requests = chrono_judge_registration::retirement_requests(r)?;
+    let requests = r.retirements.as_ref().map_err(Clone::clone)?;
     for retired in req.impact["retired_tests"]
         .as_array()
         .into_iter()
@@ -1577,13 +1570,18 @@ fn validate_retained_response(req: &Request, response: &Response, exit: i32) -> 
 
 pub fn judge(req: &Request) -> Response {
     let mut response = req.response(Status::Pass);
+    let mut observations = registration::Observations::default();
     let reader = facts::Reader::for_request(req);
     let result = reader
         .as_ref()
         .map_err(Clone::clone)
-        .and_then(|reader| evaluate(req, &mut response, reader));
+        .and_then(|reader| evaluate(req, &mut response, reader, &mut observations));
     if let Ok(reader) = &reader {
-        reader.record(&mut response);
+        if reader.is_bound() {
+            response
+                .outputs
+                .insert("git_facts".into(), observations.finish(reader));
+        }
     }
     match result {
         Ok(()) => {}
@@ -1604,10 +1602,20 @@ pub fn judge(req: &Request) -> Response {
     }
     response
 }
-fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> Result<(), String> {
+fn evaluate(
+    req: &Request,
+    response: &mut Response,
+    reader: &facts::Reader,
+    observations: &mut registration::Observations,
+) -> Result<(), String> {
     req.validate()?;
-    let (old, r, _) = chrono_judge_registration::views_with_reader(req, reader)?;
-    let inputs = chrono_judge_registration::inputs::validate(req, &old, &r)?;
+    let r = registration::views(req, reader, observations, true)?;
+    let inputs = r
+        .effective_inputs
+        .as_ref()
+        .ok_or("registration live inputs missing")?
+        .as_ref()
+        .map_err(Clone::clone)?;
     let plans: Vec<_> = req
         .prior_results
         .iter()
@@ -1662,7 +1670,6 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
             &plan,
             &plan.selected.keys().cloned().collect(),
             &r,
-            &old,
             &inputs,
         )?;
         if !completion.warnings.is_empty() {
@@ -1710,8 +1717,8 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
     if results.has_errors() {
         response.status = Status::Error;
     }
-    let requests = chrono_judge_registration::retirement_requests(&r)?;
-    let deferred = chrono_judge_registration::downstream_validator(&r, &req.judge_id);
+    let requests = r.retirements.as_ref().map_err(Clone::clone)?;
+    let deferred = r.downstream;
     for removed in &impact.retired_tests {
         match requests.get(removed) {
             Some(Some(replacement)) => {
@@ -1766,7 +1773,7 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
         &artifacts,
         reader,
     )?;
-    chrono_judge_registration::inputs::validate(req, &old, &r)
+    r.evidence(&req.candidate.root, req, json!({"mode":"live"}))
         .map_err(|e| format!("E_EVIDENCE_UNRESOLVED: post-execution {e}"))?;
     if !results.passed() {
         return Err("E_EXECUTION: selected operations/tests failed or blocked".into());

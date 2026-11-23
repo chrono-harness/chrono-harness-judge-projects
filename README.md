@@ -24,3 +24,5 @@
 需要实时诊断的调用方可以传入 `diagnostics` 日志级别。每个 stderr 记录以 `chrono-trace-v1 ` 开头，随后是一条 tracing-tunnel 0.1 JSON 事件和换行。每个操作的父 span 在产生事件的 worker 中确定。诊断写入失败时，stdout 仍会返回执行结果和 `diagnostic_error`。
 
 执行普通和单元计划前，projects 用安装的 routes 的 `dispatch-plan-v1` 校验计划，读取并发上限和完整操作下标次序。启动进程前先核对计划身份和下标覆盖。正在运行的操作继续占用原计划声明的资源与输出路径，完成后再检查下一批就绪操作。
+
+项目登记通过已安装的 `chrono-judge-registration` 解释。执行和收集从固定端点取得登记，按宿主选择的程序调用 `project-views-v1`。执行结束后重查现场输入，收集时从原产物和保留视图核对有效输入。`check-pairs-v1` 从当前宿主的 `.chrono-harness/config.json` 选定登记程序，独立调用时可从 PATH 提供。配对、语言和真实执行证据仍由 projects 判定。安装本仓固定的 registration 发行即可运行这些入口。

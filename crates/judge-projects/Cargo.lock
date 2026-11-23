@@ -90,24 +90,12 @@ name = "chrono-judge-projects"
 version = "0.1.0"
 dependencies = [
  "chrono-harness",
- "chrono-judge-registration",
  "serde",
  "serde_json",
  "tracing",
  "tracing-subscriber",
  "tracing-tunnel",
  "vstd",
-]
-
-[[package]]
-name = "chrono-judge-registration"
-version = "0.1.0"
-source = "git+https://github.com/chrono-harness/chrono-harness-judge-registration.git?rev=76530cce04ad04ebda2f71a16a8a51f930c2daa8#76530cce04ad04ebda2f71a16a8a51f930c2daa8"
-dependencies = [
- "chrono-harness",
- "serde",
- "serde_json",
- "time",
 ]
 
 [[package]]

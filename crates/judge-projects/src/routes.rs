@@ -1,10 +1,7 @@
 //! The executor consumes a checked plan and retains the original business-process receipt.
+use crate::registration::Registry;
 use chrono_harness::{
     CommandSpec, file_identity, observation::Tool, resolve_program, run_process_observed,
-};
-use chrono_judge_registration::{
-    Registrations,
-    execution::{Method, Plan, Scheduling},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -12,6 +9,64 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Method {
+    pub owner: String,
+    pub operation: String,
+    pub tool: String,
+    pub argv: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_contract: Option<chrono_harness::verified_verifier::OutputContract>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Bounds {
+    pub timeout_seconds: u64,
+    pub output_limit_bytes: usize,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Plan {
+    pub operations: Vec<String>,
+    pub timeout_seconds: u64,
+    pub output_limit_bytes: usize,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub operation_bounds: BTreeMap<String, Bounds>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Claims {
+    resources: Vec<String>,
+    outputs: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct Scheduling {
+    pub max_running: usize,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub priority: Vec<String>,
+    pub resources: Vec<String>,
+    pub claims: BTreeMap<String, Claims>,
+}
+impl Claims {
+    pub(super) fn overlaps(&self, other: &Self) -> bool {
+        self.resources
+            .iter()
+            .any(|resource| other.resources.contains(resource))
+            || self.outputs.iter().any(|path| {
+                other
+                    .outputs
+                    .iter()
+                    .any(|other| chrono_harness::units::overlap(path, other))
+            })
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -73,11 +128,7 @@ pub struct Routes<'a> {
     output_limit_bytes: usize,
 }
 impl<'a> Routes<'a> {
-    pub fn new(
-        root: &'a Path,
-        registry: &Registrations,
-        environment: &Value,
-    ) -> Result<Self, String> {
+    pub fn new(root: &'a Path, registry: &Registry, environment: &Value) -> Result<Self, String> {
         let name = "chrono-judge-routes";
         let tools = registry.config()["tools"]
             .as_array()
