@@ -29,16 +29,15 @@ fn incomplete_collection_query_is_rejected_before_reading_the_checkout() {
     assert!(error.contains("missing field"));
 }
 
-#[path = "../../judge-projects/src/compiler.rs"]
-mod compiler;
-
 #[test]
 fn compiler_originals_use_the_operation_directory_and_its_byte_limit() {
-    use chrono_harness::verified_verifier::{
-        OutputContract, observe_artifact, sources::observe_dependency,
-    };
+    use chrono_judge_projects::Receipt;
     let dir = tempfile::tempdir().unwrap();
-    let io = compiler::DependencyIo(dir.path());
+    let plan = serde_json::from_value(json!({
+        "schema": "chrono-execution-plan/v1", "identity": "fixture", "binding": {},
+        "root": dir.path(), "environment": {}, "selected": {}, "operations": [], "tools": {}
+    }))
+    .unwrap();
     let args = [
         "--crate-type=lib",
         "--no-cheating",
@@ -55,28 +54,42 @@ fn compiler_originals_use_the_operation_directory_and_its_byte_limit() {
     ]
     .map(String::from)
     .to_vec();
-    let contract = Some(OutputContract {
-        version: "fixture".into(),
-        commit: "fixture".into(),
-    });
-    let dependency =
-        |exit, failed| observe_dependency(&contract, &args, exit, failed, 4, &io).unwrap();
-    let artifact = || observe_artifact(&contract, &args, 0, false, &io).unwrap();
-    assert!(dependency(0, false).is_err());
+    let operation = serde_json::from_value(json!({
+        "method": {"owner":"fixture", "operation":"verify", "tool":"verus", "argv":args,
+                   "output_contract":{"version":"fixture","commit":"fixture"}},
+        "predecessors":[], "timeout_seconds":1, "output_limit_bytes":4
+    }))
+    .unwrap();
+    let observe = |exit: i32, failure: Option<&str>| {
+        let process = serde_json::from_value(json!({
+            "argv":args, "cwd":dir.path(), "environment":{}, "environment_digest":"",
+            "stdin_sha256":"", "stdout_bytes":[], "stderr_bytes":[], "stdout_sha256":"",
+            "stderr_sha256":"", "failure":failure, "exit_code":exit, "stdout":"", "stderr":"",
+            "executable":"verus", "sha256":""
+        }))
+        .unwrap();
+        Receipt::observe(&plan, &operation, process).unwrap()
+    };
+    let dependency = |exit, failure| observe(exit, failure).compiler_dependency.unwrap();
+    let artifact = || observe(0, None).compiler_artifact.unwrap();
+    assert!(dependency(0, None).is_err());
     assert!(artifact().is_err());
     std::fs::write(dir.path().join("library.rlib.d"), [0u8, 255, 1, 127]).unwrap();
     let content = vec![255u8; 65537];
     std::fs::write(dir.path().join("library.rlib"), &content).unwrap();
-    assert_eq!(dependency(0, false).unwrap(), [0, 255, 1, 127]);
+    assert_eq!(dependency(0, None).unwrap(), [0, 255, 1, 127]);
     let original = artifact().unwrap();
     assert_eq!(original.path, b"library.rlib");
-    assert_eq!(original.sha256, chrono_harness::sha256(&content).as_bytes());
+    assert_eq!(
+        original.sha256,
+        b"ef9993e97e36b66b65b16a741da437aecddffa22185e176a49f8cfe9ecc7a07c"
+    );
     assert_eq!(original.length, 65537);
-    assert!(dependency(9, false).is_err());
-    assert!(dependency(0, true).is_err());
+    assert!(dependency(9, None).is_err());
+    assert!(dependency(0, Some("capture failed")).is_err());
     std::fs::write(dir.path().join("library.rlib.d"), [255u8; 5]).unwrap();
     assert!(
-        dependency(0, false)
+        dependency(0, None)
             .unwrap_err()
             .contains("exceeds its bound")
     );

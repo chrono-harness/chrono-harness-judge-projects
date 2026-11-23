@@ -4,13 +4,13 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Debug, Deserialize)]
-pub(crate) struct ProjectImpact {
+pub struct ProjectImpact {
     pub reached: BTreeSet<String>,
     pub retired_tests: Vec<String>,
 }
 
 /// FILEMAP owns the decoder for the complete impact, including fields projects never reads.
-pub(crate) fn decode(
+pub fn decode(
     impact: &Value,
     protocol: &Value,
     environment: &BTreeMap<String, String>,
