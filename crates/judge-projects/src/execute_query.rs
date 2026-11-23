@@ -35,13 +35,9 @@ pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result
             "E_PLAN_BINDING: execute from the plan root with an absolute routes executable".into(),
         );
     }
-    let config = crate::registration::host_config(root)?;
-    let runner = config["runner"]["path"]
-        .as_str()
-        .unwrap_or("chrono-harness");
     let routes = Routes::bound(
         root,
-        chrono_harness::resolve_program(root, runner, None)?,
+        crate::host_runner(root)?,
         &query.routes.executable,
         Some(&query.routes.sha256),
         query.plan.environment.clone(),

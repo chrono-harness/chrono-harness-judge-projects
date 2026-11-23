@@ -1566,6 +1566,34 @@ fn validate_retained_response(req: &Request, response: &Response) -> Result<(), 
     Ok(())
 }
 
+pub fn host_runner(root: &Path) -> Result<std::path::PathBuf, String> {
+    let config = registration::host_config(root)?;
+    chrono_harness::resolve_program(
+        root,
+        config["runner"]["path"]
+            .as_str()
+            .unwrap_or("chrono-harness"),
+        None,
+    )
+}
+
+pub fn evaluate_original(
+    input: impl std::io::Read,
+    mut output: impl std::io::Write,
+) -> Result<(), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Original {
+        request: Request,
+    }
+    let Original { request } = serde_json::from_reader(input).map_err(|e| e.to_string())?;
+    let response = judge(&request);
+    serde_json::to_writer(&mut output, &json!({
+        "status":response.status,"outputs":response.outputs,"findings":response.findings,"evidence":response.evidence
+    })).map_err(|e| e.to_string())?;
+    output.flush().map_err(|e| e.to_string())
+}
+
 pub fn judge(req: &Request) -> Response {
     let mut response = req.response(Status::Pass);
     let mut observations = registration::Observations::default();
