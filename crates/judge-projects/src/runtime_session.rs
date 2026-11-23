@@ -17,11 +17,12 @@ impl Session {
     pub fn open(root: &Path, program: &Path, name: &'static str) -> Result<Self, String> {
         let mut command = Command::new(program);
         command
+            .arg("exec-with-descriptors-v1")
+            .arg(program)
             .arg(name)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
-        chrono_harness::process_fds::forward_command(&mut command, &[])?;
         let mut child = command
             .spawn()
             .map_err(|e| format!("{} {name}: {e}", program.display()))?;

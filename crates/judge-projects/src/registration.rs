@@ -68,19 +68,21 @@ pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
 /// the caller selects the directory in which the registration query must interpret them.
 fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<Value, String> {
     let program = program.canonicalize().map_err(|err| err.to_string())?;
-    let digest = chrono_harness::file_identity(&program)?.0;
-    let mut command = Command::new(&program);
+    let runner = crate::host_runner(root)?;
+    let mut command = Command::new(&runner);
     command
         .current_dir(root)
-        .arg(operation)
+        .arg("exec-with-descriptors-v1")
+        .arg(&runner)
+        .arg("installed-query-v1")
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    chrono_harness::process_fds::forward_command(&mut command, &[])?;
+    let request = json!({"root":root,"environment":"inherited","program":program,"operation":operation,"input":input});
     let mut process = command.spawn().map_err(|e| e.to_string())?;
     let stdin = process.stdin.take().expect("piped stdin");
     let (output, written) = std::thread::scope(|scope| {
-        let sender = scope.spawn(move || serde_json::to_writer(stdin, input));
+        let sender = scope.spawn(move || serde_json::to_writer(stdin, &request));
         (process.wait_with_output(), sender.join())
     });
     let out = output.map_err(|e| e.to_string())?;
@@ -95,9 +97,6 @@ fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<
     written
         .map_err(|_| "registration input writer panicked")?
         .map_err(|e| e.to_string())?;
-    if chrono_harness::file_identity(&program)?.0 != digest {
-        return Err("E_TOOL_BINDING: registration executable changed".into());
-    }
     chrono_harness::decode(&out.stdout)
 }
 impl Registry {

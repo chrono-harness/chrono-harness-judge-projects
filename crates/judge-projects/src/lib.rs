@@ -1588,9 +1588,21 @@ pub fn evaluate_original(
     }
     let Original { request } = serde_json::from_reader(input).map_err(|e| e.to_string())?;
     let response = judge(&request);
-    serde_json::to_writer(&mut output, &json!({
-        "status":response.status,"outputs":response.outputs,"findings":response.findings,"evidence":response.evidence
-    })).map_err(|e| e.to_string())?;
+    #[derive(Serialize)]
+    struct Decision {
+        status: Status,
+        outputs: BTreeMap<String, Value>,
+        findings: Vec<Finding>,
+        #[serde(skip_serializing_if = "Vec::is_empty")]
+        evidence: Vec<wire::Evidence>,
+    }
+    let decision = Decision {
+        status: response.status,
+        outputs: response.outputs,
+        findings: response.findings,
+        evidence: response.evidence,
+    };
+    serde_json::to_writer(&mut output, &decision).map_err(|e| e.to_string())?;
     output.flush().map_err(|e| e.to_string())
 }
 

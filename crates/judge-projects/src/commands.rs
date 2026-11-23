@@ -32,12 +32,13 @@ pub(crate) fn invoke(
     }
     let mut command = Command::new(runner);
     command
+        .arg("exec-with-descriptors-v1")
+        .arg(runner)
         .arg("run-command-v1")
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    chrono_harness::process_fds::forward_command(&mut command, &[])?;
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     let (reply, written) = std::thread::scope(|scope| {
