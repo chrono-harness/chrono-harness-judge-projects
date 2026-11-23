@@ -1,18 +1,21 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
+mod commands;
 mod compiler;
 pub mod evidence_query;
 pub mod execute_query;
+mod git_reader;
 mod impact;
 pub use impact::decode as decode_impact;
 mod pair_checks;
 pub mod plan_trace;
 mod receipt;
 mod routes;
+mod runtime_session;
 mod state;
 mod verified_languages;
 mod verified_state;
 use chrono_harness::{
-    CommandSpec, facts, run_process_observed_retained,
+    CommandSpec, facts,
     wire::{self, Binding, Finding, Request, Response, Status},
 };
 mod registration;
@@ -76,8 +79,13 @@ impl Results {
     }
 }
 /// Execute a plan admitted by the installed routes judge.
-fn execute(plan: &Execution, routes: &Routes, dispatch: &Dispatch) -> Result<Results, String> {
-    let state = state::Run::begin(plan)?;
+fn execute(
+    plan: &Execution,
+    routes: &Routes,
+    dispatch: &Dispatch,
+    runner: &Path,
+) -> Result<Results, String> {
+    let state = state::Run::begin(plan, runner)?;
     let plan_original = &state.plan_original;
     let span = tracing::info_span!("projects.execution", plan = plan.identity);
     let _entered = span.enter();
@@ -169,7 +177,7 @@ fn execute(plan: &Execution, routes: &Routes, dispatch: &Dispatch) -> Result<Res
                             "operation worker started"
                         );
                         let row = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                            execute_operation(plan, index, plan_original, routes)
+                            execute_operation(plan, index, plan_original, routes, runner)
                         }))
                         .unwrap_or_else(|_| OperationResult {
                             operation: op.method.operation.clone(),
@@ -256,6 +264,7 @@ fn execute_operation(
     index: usize,
     plan_original: &Value,
     routes: &Routes,
+    runner: &Path,
 ) -> OperationResult {
     let op = &plan.operations[index];
     let mut state = None;
@@ -271,14 +280,8 @@ fn execute_operation(
             timeout_seconds: op.timeout_seconds,
             output_limit_bytes: op.output_limit_bytes,
         };
-        state = Some(state::Operation::begin(plan, index, plan_original)?);
-        let process = run_process_observed_retained(
-            &plan.root,
-            &spec,
-            &[],
-            &tool.sha256,
-            &state.as_ref().unwrap().evidence(),
-        )?;
+        state = Some(state::Operation::begin(plan, index, plan_original, runner)?);
+        let process = state.as_ref().unwrap().execute(&spec, &tool.sha256)?;
         Receipt::observe(plan, op, process)
     })();
     let (receipt, error, status) = match result {
@@ -384,24 +387,22 @@ fn pairs(root: &Path, r: &Registry, affected: &BTreeSet<String>) -> Result<(), S
         &tests_for_owner,
     )
 }
-pub fn snapshot_with_reader(
-    root: &Path,
+fn snapshot_with_reader(
     candidate: &str,
     artifacts: &[String],
-    reader: &facts::Reader,
+    reader: &mut git_reader::Reader,
 ) -> Result<(), String> {
-    let artifacts: Vec<_> = artifacts.iter().map(String::as_str).collect();
-    let state = reader.checkout_excluding(root, candidate, &artifacts)?;
+    let state = reader.checkout(artifacts)?;
     if state.head != candidate
         || !state.tracked.is_empty()
         || state
             .untracked
             .iter()
-            .any(|p| !artifacts.iter().any(|a| p.starts_with(a)))
-        || state
-            .index_flags
-            .iter()
-            .any(|f| f.tag.as_bytes()[0].is_ascii_lowercase() || f.tag.eq_ignore_ascii_case("S"))
+            .any(|p| !artifacts.iter().any(|a| p.starts_with(a.as_str())))
+        || state.index_flags.iter().any(|f| {
+            f.tag.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                || f.tag.eq_ignore_ascii_case("S")
+        })
     {
         return Err("E_SNAPSHOT_DIRTY: operation changed candidate inputs".into());
     }
@@ -1571,18 +1572,19 @@ fn validate_retained_response(req: &Request, response: &Response, exit: i32) -> 
 pub fn judge(req: &Request) -> Response {
     let mut response = req.response(Status::Pass);
     let mut observations = registration::Observations::default();
-    let reader = facts::Reader::for_request(req);
-    let result = reader
-        .as_ref()
-        .map_err(Clone::clone)
-        .and_then(|reader| evaluate(req, &mut response, reader, &mut observations));
-    if let Ok(reader) = &reader {
-        if reader.is_bound() {
-            response
-                .outputs
-                .insert("git_facts".into(), observations.finish(reader));
+    let result = git_reader::Reader::open(req).and_then(|mut reader| {
+        let evaluation = evaluate(req, &mut response, &mut reader, &mut observations);
+        let facts = if reader.bound {
+            observations.finish(&mut reader).map(Some)
+        } else {
+            Ok(None)
+        };
+        let closed = reader.close();
+        if let Some(facts) = facts? {
+            response.outputs.insert("git_facts".into(), facts);
         }
-    }
+        evaluation.and(closed)
+    });
     match result {
         Ok(()) => {}
         Err(message) => {
@@ -1605,7 +1607,7 @@ pub fn judge(req: &Request) -> Response {
 fn evaluate(
     req: &Request,
     response: &mut Response,
-    reader: &facts::Reader,
+    reader: &mut git_reader::Reader,
     observations: &mut registration::Observations,
 ) -> Result<(), String> {
     req.validate()?;
@@ -1647,12 +1649,7 @@ fn evaluate(
         &r.config()["protocol"],
         &plan.environment,
         |command, input| {
-            let process = chrono_harness::run_process(&req.candidate.root, command, input)?;
-            Ok((
-                process.exit_code,
-                process.stdout_bytes,
-                process.stderr_bytes,
-            ))
+            commands::invoke(&req.candidate.root, routes.runner(), command, None, input)
         },
     )?;
     let mut affected = impact.reached;
@@ -1704,13 +1701,8 @@ fn evaluate(
         );
         return Ok(());
     };
-    snapshot_with_reader(
-        &req.candidate.root,
-        &req.candidate.commit,
-        &artifacts,
-        reader,
-    )?;
-    let mut results = execute(&plan, &routes, &dispatch)?;
+    snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
+    let mut results = execute(&plan, &routes, &dispatch, routes.runner())?;
     if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
     }
@@ -1767,12 +1759,7 @@ fn evaluate(
     response
         .outputs
         .insert("tests".into(), serde_json::to_value(&results).unwrap());
-    snapshot_with_reader(
-        &req.candidate.root,
-        &req.candidate.commit,
-        &artifacts,
-        reader,
-    )?;
+    snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
     r.evidence(&req.candidate.root, req, json!({"mode":"live"}))
         .map_err(|e| format!("E_EVIDENCE_UNRESOLVED: post-execution {e}"))?;
     if !results.passed() {

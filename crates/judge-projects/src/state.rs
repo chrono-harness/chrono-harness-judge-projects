@@ -1,7 +1,7 @@
 //! Execution originals belong to projects; retention only protects their lifetime.
 #![allow(unexpected_cfgs)]
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::verus;
+use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
@@ -17,13 +17,13 @@ pub fn owned_compiler_output(exact_name: bool, single_component: bool, canonical
 #[cfg(not(verus_keep_ghost))]
 use crate::routes::Execution;
 #[cfg(not(verus_keep_ghost))]
+use crate::runtime_session::Session;
+#[cfg(not(verus_keep_ghost))]
 use crate::verified_state::{self, OperationObservation};
 #[cfg(not(verus_keep_ghost))]
 use crate::{OperationResult, Results};
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::retained_artifacts::retention::{self, Inventory, Publication};
-#[cfg(not(verus_keep_ghost))]
-use chrono_harness::{ProcessEvidence, no_symlink_parents, sha256};
+use chrono_harness::{CommandSpec, ProcessResult, no_symlink_parents, sha256};
 #[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
 #[cfg(not(verus_keep_ghost))]
@@ -33,7 +33,8 @@ use std::{fs, path::PathBuf, time::SystemTime};
 struct Original {
     root: PathBuf,
     path: String,
-    publication: Option<Publication>,
+    session: std::cell::RefCell<Session>,
+    adopted: bool,
 }
 
 #[cfg(not(verus_keep_ghost))]
@@ -46,73 +47,42 @@ fn now() -> Result<u128, String> {
 
 #[cfg(not(verus_keep_ghost))]
 impl Original {
-    fn recovery(&self) -> String {
-        format!("projects-recovery:{}", sha256(self.path.as_bytes()))
-    }
-
-    fn begin(plan: &Execution, path: String, intent: Value) -> Result<Self, String> {
-        chrono_harness::units::artifact_path(&path)?;
-        let absolute = no_symlink_parents(&plan.root, &path)?;
-        fs::create_dir_all(absolute.parent().ok_or("operation state parent missing")?)
-            .map_err(|e| e.to_string())?;
-        no_symlink_parents(&plan.root, &path)?;
-        let mut original = Self {
+    fn begin(
+        plan: &Execution,
+        path: String,
+        intent: Value,
+        runner: &std::path::Path,
+    ) -> Result<Self, String> {
+        let mut session = Session::open(&plan.root, runner, "retained-artifacts-v1")?;
+        #[derive(serde::Deserialize)]
+        struct Opened {
+            adopted: bool,
+        }
+        let opened: Opened = session.call(
+            json!({"operation":"begin-directory","producer":"check-original",
+            "path":path,"reference":format!("projects-recovery:{}", sha256(path.as_bytes())),
+            "intent":{"kind":"project-execution","plan":plan.identity,"state":"unknown"}}),
+        )?;
+        let original = Self {
             root: plan.root.clone(),
             path,
-            publication: None,
+            session: std::cell::RefCell::new(session),
+            adopted: opened.adopted,
         };
-        if let Some(inventory) = Inventory::adopted(&plan.root)? {
-            if !inventory.accepts("check-original", &original.path) {
-                return Err(
-                    "operation originals require the registered check-original retention scope"
-                        .into(),
-                );
-            }
-            let publication = inventory.plan(
-                "check-original",
-                &original.path,
-                true,
-                json!({"kind":"project-execution", "plan":plan.identity, "state":"unknown"}),
-            )?;
-            publication.materialize_for_reference(&original.recovery())?;
-            original.publication = Some(publication);
-        } else {
-            fs::create_dir(&absolute).map_err(|e| {
-                format!(
-                    "operation state {}: {e}; preserve originals, do not redispatch",
-                    original.path
-                )
-            })?;
-        }
         original.write("intent.json", &intent)?;
         Ok(original)
     }
 
     fn write(&self, name: &str, value: &Value) -> Result<Value, String> {
-        let bytes = serde_json::to_vec(value).map_err(|e| e.to_string())?;
-        let path = format!("{}/{name}", self.path);
-        retention::write_adopted(self.publication.as_ref(), &self.root.join(&path), &bytes)?;
-        fs::File::open(self.root.join(&self.path))
-            .and_then(|directory| directory.sync_all())
-            .map_err(|e| e.to_string())?;
-        Ok(json!({"path":path,"sha256":sha256(&bytes),"length":bytes.len()}))
+        self.session
+            .borrow_mut()
+            .call(json!({"operation":"write-directory","path":self.path,"name":name,"value":value}))
     }
 
-    fn finish(mut self, terminal: bool, outcome: Value, inputs: &[String]) -> Result<(), String> {
-        let inventory = Inventory::adopted(&self.root)?;
-        if let Some(inventory) = &inventory {
-            inventory.dependencies_paths(&self.path, inputs)?;
-        }
-        if let Some(publication) = self.publication.take() {
-            publication.complete_sealed(outcome)?;
-        }
-        if let Some(inventory) = inventory {
-            inventory.retain_diagnostic_path(&self.path)?;
-            if terminal {
-                inventory.reference_paths(&self.recovery(), &[])?;
-            }
-        }
-        Ok(())
+    fn finish(self, terminal: bool, outcome: Value, inputs: &[String]) -> Result<(), String> {
+        let mut session = self.session.into_inner();
+        session.call::<()>(json!({"operation":"finish-directory","path":self.path,"terminal":terminal,"outcome":outcome,"inputs":inputs}))?;
+        session.close()
     }
 }
 
@@ -160,7 +130,7 @@ fn encoded(row: &OperationResult, retained_process: Option<Value>) -> Result<Val
 
 #[cfg(not(verus_keep_ghost))]
 impl Run {
-    pub(crate) fn begin(plan: &Execution) -> Result<Self, String> {
+    pub(crate) fn begin(plan: &Execution, runner: &std::path::Path) -> Result<Self, String> {
         let path = address(plan)?.to_owned();
         let original = Original::begin(
             plan,
@@ -171,6 +141,7 @@ impl Run {
                 "handle":null, "result":null,
                 "recovery":"read this execution and its independent operation originals; absent results remain unknown; never redispatch the same identity"
             }),
+            runner,
         )?;
         let plan_original = original.write(
             "plan.json",
@@ -247,6 +218,7 @@ impl Operation {
         plan: &Execution,
         index: usize,
         plan_original: &Value,
+        runner: &std::path::Path,
     ) -> Result<Self, String> {
         let run = address(plan)?;
         let path = format!("{run}.operation-{index}");
@@ -287,6 +259,7 @@ impl Operation {
                 "process_originals":streams.iter().map(|p| p.strip_prefix(&plan.root).unwrap()).collect::<Vec<_>>(),
                 "recovery":"the native runner owns the only wait; inspect launch and partial streams; missing result remains unknown"
             }),
+            runner,
         )?;
         Ok(Self {
             original,
@@ -295,14 +268,12 @@ impl Operation {
         })
     }
 
-    pub(crate) fn evidence(&self) -> ProcessEvidence<'_> {
-        ProcessEvidence {
-            root: &self.original.root,
-            stdout: &self.streams[0],
-            stderr: &self.streams[1],
-            launch: &self.streams[2],
-            publication: self.original.publication.as_ref(),
-        }
+    pub(crate) fn execute(
+        &self,
+        command: &CommandSpec,
+        expected_sha256: &str,
+    ) -> Result<ProcessResult, String> {
+        self.original.session.borrow_mut().call(json!({"operation":"execute-retained","path":self.original.path,"command":command,"expected_sha256":expected_sha256}))
     }
 
     /// The run owns this directory until all its operations have joined. Its durable receipt contains
@@ -345,7 +316,7 @@ impl Operation {
             verified_state::validate_original(&actual.0, actual.1, Some((digest, length)))?;
             entries.push((relative, identity));
         }
-        if self.original.publication.is_none() {
+        if !self.original.adopted {
             fs::File::open(root.join(&self.original.path).join("result.json"))
                 .and_then(|file| file.sync_all())
                 .map_err(|e| e.to_string())?;
@@ -357,10 +328,10 @@ impl Operation {
         chrono_harness::artifact_disposal::source_safe(root, parent)?;
         for (relative, identity) in entries {
             chrono_harness::artifact_disposal::dispose_entry(root, relative, &identity, || {
-                if let Some(publication) = &self.original.publication {
-                    publication.check_length(0)?;
-                }
-                Ok(())
+                self.original
+                    .session
+                    .borrow_mut()
+                    .call(json!({"operation":"check-directory-write","path":self.original.path}))
             })?;
         }
         fs::File::open(no_symlink_parents(root, parent)?)

@@ -1,6 +1,7 @@
 //! Read registration projections for the executor and replay original declarations.
+use crate::git_reader::Reader;
 use crate::routes::Scheduling;
-use chrono_harness::{facts, wire::Request};
+use chrono_harness::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
@@ -45,13 +46,17 @@ fn installed(root: &Path, config: &Value) -> Result<PathBuf, String> {
     chrono_harness::resolve_program(root, program, None)
 }
 
-pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
+pub(super) fn host_config(root: &Path) -> Result<Value, String> {
     let entry = ".chrono-harness/config.json";
-    let config = if root.join(entry).try_exists().map_err(|e| e.to_string())? {
-        chrono_harness::load_selected_config(root, entry)?
+    if root.join(entry).try_exists().map_err(|e| e.to_string())? {
+        chrono_harness::load_selected_config(root, entry)
     } else {
-        Value::Null
-    };
+        Ok(Value::Null)
+    }
+}
+
+pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
+    let config = host_config(root)?;
     let program = installed(root, &config)?;
     if !query(root, &program, "check-project-registry-v1", registry)?.is_null() {
         return Err("E_PROTOCOL: invalid project registry response".into());
@@ -159,8 +164,8 @@ pub(super) struct Observations {
 }
 
 impl Observations {
-    fn record(&mut self, reader: &facts::Reader, mut external: Value) -> Result<(), String> {
-        let mut original = reader.observation();
+    fn record(&mut self, reader: &mut Reader, mut external: Value) -> Result<(), String> {
+        let mut original = reader.observation()?;
         let local = original
             .as_object_mut()
             .ok_or("E_GIT_FACTS: missing projects binding")?;
@@ -179,38 +184,28 @@ impl Observations {
         self.extra = Some((local_rows.len(), remote_rows));
         Ok(())
     }
-    pub fn finish(self, reader: &facts::Reader) -> Value {
-        let mut original = reader.observation();
+    pub fn finish(self, reader: &mut Reader) -> Result<Value, String> {
+        let mut original = reader.observation()?;
         if let (Some((offset, extra)), Some(processes)) =
             (self.extra, original["processes"].as_array_mut())
         {
             processes.splice(offset..offset, extra);
         }
-        original
+        Ok(original)
     }
 }
 
 pub(super) fn views(
     req: &Request,
-    reader: &facts::Reader,
+    reader: &mut Reader,
     observations: &mut Observations,
     validate_inputs: bool,
 ) -> Result<Registry, String> {
     let root = &req.candidate.root;
-    let base = reader.registry_snapshot(root, &req.base.commit, &req.config_path)?;
-    let candidate = reader.registry_snapshot(root, &req.candidate.commit, &req.config_path)?;
+    let base = reader.snapshot("base")?;
+    let candidate = reader.snapshot("candidate")?;
     let program = installed(root, &candidate.values[&candidate.effective_path])?;
-    let originals =
-        |snapshot: facts::RegistrySnapshot| -> Result<BTreeMap<String, String>, String> {
-            snapshot
-                .bytes
-                .into_iter()
-                .map(|(path, bytes)| {
-                    Ok((path, String::from_utf8(bytes).map_err(|e| e.to_string())?))
-                })
-                .collect()
-        };
-    let request = json!({"request":req,"validate_inputs":validate_inputs,"originals":[originals(base)?,originals(candidate)?]});
+    let request = json!({"request":req,"validate_inputs":validate_inputs,"originals":[base.originals,candidate.originals]});
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
     let mut reply = query(&cwd, &program, "project-views-v1", &request)?;
     if reply["request_id"] != req.request_id
