@@ -25,3 +25,7 @@ path = "tests/verified_languages.rs"
 [[test]]
 name = "impact_summary"
 path = "tests/impact_summary.rs"
+
+[[test]]
+name = "evidence_query"
+path = "tests/evidence_query.rs"
