@@ -20,6 +20,7 @@ use crate::routes::Execution;
 use crate::runtime_session::Session;
 #[cfg(not(verus_keep_ghost))]
 use crate::verified_state::{self, OperationObservation};
+#[cfg(not(verus_keep_ghost))]
 use crate::wire::sha256;
 #[cfg(not(verus_keep_ghost))]
 use crate::{OperationResult, Results};
