@@ -1,8 +1,7 @@
 //! The executor consumes a checked plan and retains the original business-process receipt.
+use crate::commands::{self, Spec};
 use crate::registration::Registry;
-use chrono_harness::{
-    CommandSpec, file_identity, observation::Tool, resolve_program, run_process_observed,
-};
+use chrono_harness::{file_identity, observation::Tool, resolve_program};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -121,6 +120,7 @@ impl Dispatch {
 /// A transported plan can refer to a different original working directory.
 pub struct Routes<'a> {
     root: &'a Path,
+    runner: PathBuf,
     program: String,
     digest: String,
     environment: BTreeMap<String, String>,
@@ -192,8 +192,10 @@ impl<'a> Routes<'a> {
         if expected.is_some_and(|digest| digest != observed) {
             return Err("E_TOOL_BINDING: routes executable differs".into());
         }
+        let runner = resolve_program(root, "chrono-harness", None)?;
         Ok(Self {
             root,
+            runner,
             program: path.to_str().ok_or("routes path is not UTF-8")?.into(),
             digest: observed,
             environment,
@@ -202,8 +204,12 @@ impl<'a> Routes<'a> {
         })
     }
 
+    pub fn runner(&self) -> &Path {
+        &self.runner
+    }
+
     pub fn query(&self, command: &str, input: &impl Serialize) -> Result<Value, String> {
-        let spec = CommandSpec {
+        let spec = Spec {
             program: self.program.clone(),
             args: vec![command.into()],
             env: self.environment.clone(),
@@ -211,18 +217,19 @@ impl<'a> Routes<'a> {
             output_limit_bytes: self.output_limit_bytes,
         };
         let bytes = serde_json::to_vec(input).map_err(|e| e.to_string())?;
-        let p = run_process_observed(self.root, &spec, &bytes, &self.digest)?;
-        if let Some(failure) = p.failure {
-            return Err(failure);
+        let (code, stdout, stderr) =
+            commands::invoke(self.root, &self.runner, &spec, Some(&self.digest), &bytes)?;
+        if code != 0 {
+            if stderr.is_empty() {
+                return Err(format!("routes {command} exited {code}"));
+            }
+            let diagnostic = String::from_utf8(stderr).map_err(|e| e.to_string())?;
+            return Err(diagnostic
+                .strip_suffix('\n')
+                .unwrap_or(&diagnostic)
+                .to_owned());
         }
-        if p.exit_code != 0 {
-            return Err(if p.stderr.is_empty() {
-                format!("routes {command} exited {}", p.exit_code)
-            } else {
-                p.stderr.strip_suffix('\n').unwrap_or(&p.stderr).to_owned()
-            });
-        }
-        chrono_harness::decode(&p.stdout_bytes)
+        serde_json::from_slice(&stdout).map_err(|e| e.to_string())
     }
     pub fn check(&self, plan: &Execution) -> Result<(), String> {
         let reply = self.query("check-plan-v1", plan)?;

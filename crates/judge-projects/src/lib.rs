@@ -1,4 +1,5 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
+mod commands;
 mod compiler;
 pub mod evidence_query;
 pub mod execute_query;
@@ -1648,12 +1649,7 @@ fn evaluate(
         &r.config()["protocol"],
         &plan.environment,
         |command, input| {
-            let process = chrono_harness::run_process(&req.candidate.root, command, input)?;
-            Ok((
-                process.exit_code,
-                process.stdout_bytes,
-                process.stderr_bytes,
-            ))
+            commands::invoke(&req.candidate.root, routes.runner(), command, None, input)
         },
     )?;
     let mut affected = impact.reached;
