@@ -17,7 +17,7 @@ use chrono_harness::{
 };
 use chrono_judge_registration::Registrations;
 pub use receipt::Receipt;
-use routes::{Execution, Routes};
+use routes::{Dispatch, Execution, Routes};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -75,7 +75,7 @@ impl Results {
     }
 }
 /// Execute a plan admitted by the installed routes judge.
-fn execute(plan: &Execution, routes: &Routes) -> Result<Results, String> {
+fn execute(plan: &Execution, routes: &Routes, dispatch: &Dispatch) -> Result<Results, String> {
     let state = state::Run::begin(plan)?;
     let plan_original = &state.plan_original;
     let span = tracing::info_span!("projects.execution", plan = plan.identity);
@@ -103,28 +103,9 @@ fn execute(plan: &Execution, routes: &Routes) -> Result<Results, String> {
         let mut pending: BTreeSet<usize> = (0..plan.operations.len()).collect();
         let mut running = BTreeSet::new();
         let mut rows = BTreeMap::new();
-        let cap = plan.scheduling.as_ref().map_or(1, |p| p.max_running);
-        let mut launch_order: Vec<_> = pending.iter().copied().collect();
-        if let Some(policy) = &plan.scheduling {
-            let ranks: BTreeMap<_, _> = policy
-                .priority
-                .iter()
-                .enumerate()
-                .map(|(rank, id)| (id, rank))
-                .collect();
-            launch_order.sort_by_key(|index| {
-                (
-                    ranks
-                        .get(&plan.operations[*index].method.operation)
-                        .copied()
-                        .unwrap_or(usize::MAX),
-                    *index,
-                )
-            });
-        }
         while !pending.is_empty() || !running.is_empty() {
             let mut progressed = false;
-            for index in launch_order.iter().copied() {
+            for &index in &dispatch.order {
                 if !pending.contains(&index) {
                     continue;
                 }
@@ -152,7 +133,7 @@ fn execute(plan: &Execution, routes: &Routes) -> Result<Results, String> {
                     progressed = true;
                     continue;
                 }
-                if running.len() >= cap
+                if running.len() >= dispatch.max_running.get()
                     || op.predecessors.iter().any(|id| !statuses.contains_key(id))
                     || plan.scheduling.as_ref().is_some_and(|policy| {
                         running.iter().any(|i: &usize| {
@@ -1641,7 +1622,15 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
         &r,
         &req.observations["environment"]["effective"],
     )?;
-    routes.check(&plan)?;
+    let dispatch = if matches!(
+        req.scope,
+        Some(chrono_harness::units::Scope::Collect { .. })
+    ) {
+        routes.check(&plan)?;
+        None
+    } else {
+        Some(routes.dispatch(&plan)?)
+    };
     if plan.binding != routes.binding(req, &inputs)? || plan.root != req.candidate.root {
         return Err("E_PLAN_IDENTITY: endpoints/registry/context/inputs/run".into());
     }
@@ -1667,10 +1656,7 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
         .iter()
         .map(|a| a["path"].as_str().unwrap().to_string())
         .collect();
-    if matches!(
-        req.scope,
-        Some(chrono_harness::units::Scope::Collect { .. })
-    ) {
+    let Some(dispatch) = dispatch else {
         let (results, completion) = collect_reports(
             req,
             &plan,
@@ -1710,14 +1696,14 @@ fn evaluate(req: &Request, response: &mut Response, reader: &facts::Reader) -> R
             }),
         );
         return Ok(());
-    }
+    };
     snapshot_with_reader(
         &req.candidate.root,
         &req.candidate.commit,
         &artifacts,
         reader,
     )?;
-    let mut results = execute(&plan, &routes)?;
+    let mut results = execute(&plan, &routes, &dispatch)?;
     if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
     }
