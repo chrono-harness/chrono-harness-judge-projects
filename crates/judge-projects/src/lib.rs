@@ -1702,8 +1702,7 @@ fn evaluate(
         return Ok(());
     };
     snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
-    let runner = chrono_harness::resolve_program(&plan.root, &req.runner.path, None)?;
-    let mut results = execute(&plan, &routes, &dispatch, &runner)?;
+    let mut results = execute(&plan, &routes, &dispatch, routes.runner())?;
     if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
     }

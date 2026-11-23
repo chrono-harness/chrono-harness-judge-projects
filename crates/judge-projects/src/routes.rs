@@ -167,8 +167,12 @@ impl<'a> Routes<'a> {
             resolve_program(root, program, environment.get("PATH").map(String::as_str))?
         };
         let protocol = &registry.config()["protocol"];
+        let runner = registry.config()["runner"]["path"]
+            .as_str()
+            .ok_or("missing registered runner path")?;
         Self::bound(
             root,
+            resolve_program(root, runner, None)?,
             &path,
             expected,
             environment,
@@ -182,6 +186,7 @@ impl<'a> Routes<'a> {
 
     pub(super) fn bound(
         root: &'a Path,
+        runner: PathBuf,
         path: &Path,
         expected: Option<&str>,
         environment: BTreeMap<String, String>,
@@ -192,7 +197,6 @@ impl<'a> Routes<'a> {
         if expected.is_some_and(|digest| digest != observed) {
             return Err("E_TOOL_BINDING: routes executable differs".into());
         }
-        let runner = resolve_program(root, "chrono-harness", None)?;
         Ok(Self {
             root,
             runner,

@@ -19,7 +19,7 @@
 
 项目执行方通过宿主安装的 `chrono-judge-routes` 校验执行计划、核对原生执行回执，并在收集时重放声明。宿主可在 tools 中显式选择 routes 程序，或在 judges 中登记执行路径及 SHA-256。其余宿主使用有效 PATH 中的安装。业务子进程、并发调度和输出原件由 projects 持有。projects 在原执行目录记录编译器依赖文件和库的身份，发布回执后按本仓生命周期回收原件。单元收集按贡献者的原坐标核对回执，在收集检出调用已安装的判官。
 
-`execute-plan-v1` 从标准输入接收 CI 已准备的执行计划。在计划的 `root` 目录运行。JSON 包含 `plan` 和 `routes`。后者提供已安装的 routes 的绝对路径 `executable`、`sha256`、查询时限 `timeout_seconds` 和 `output_limit_bytes`。projects 先校验 routes 程序及计划，再执行已登记的操作并等待所有 worker，最后在 stdout 返回 `{results, diagnostic_error}`。每个操作结束后，projects 把已验计划中的该项方法、工具、环境及实际回执交给 routes 的 `check-operation-receipt-v1`。每个操作的退出码和原始输出保存在 results 的回执中。取得完整结果时命令退出 0，调用方从操作结果判断业务是否通过。输入、计划、执行器或结果传输异常时退出 2。
+`execute-plan-v1` 从标准输入接收 CI 已准备的执行计划。在计划的 `root` 目录运行。JSON 包含 `plan` 和 `routes`。后者提供已安装的 routes 的绝对路径 `executable`、`sha256`、查询时限 `timeout_seconds` 和 `output_limit_bytes`。projects 先校验 routes 程序及计划，再执行已登记的操作并等待所有 worker，最后在 stdout 返回 `{results, diagnostic_error}`。每个操作结束后，projects 把已验计划中的该项方法、工具、环境及实际回执交给 routes 的 `check-operation-receipt-v1`。每个操作的退出码和原始输出保存在 results 的回执中。 Git 观察、命令执行和原件目录使用宿主安装的 runner，要求支持 `git-facts-v1` 的 `checkout-excluding`、`run-command-v1` 和 `retained-artifacts-v1` 的目录会话。独立调用时从宿主配置读取 runner 路径；没有宿主配置时从 PATH 解析 `chrono-harness`。取得完整结果时命令退出 0，调用方从操作结果判断业务是否通过。输入、计划、执行器或结果传输异常时退出 2。
 
 需要实时诊断的调用方可以传入 `diagnostics` 日志级别。每个 stderr 记录以 `chrono-trace-v1 ` 开头，随后是一条 tracing-tunnel 0.1 JSON 事件和换行。每个操作的父 span 在产生事件的 worker 中确定。诊断写入失败时，stdout 仍会返回执行结果和 `diagnostic_error`。
 

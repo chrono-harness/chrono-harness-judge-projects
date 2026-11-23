@@ -46,13 +46,17 @@ fn installed(root: &Path, config: &Value) -> Result<PathBuf, String> {
     chrono_harness::resolve_program(root, program, None)
 }
 
-pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
+pub(super) fn host_config(root: &Path) -> Result<Value, String> {
     let entry = ".chrono-harness/config.json";
-    let config = if root.join(entry).try_exists().map_err(|e| e.to_string())? {
-        chrono_harness::load_selected_config(root, entry)?
+    if root.join(entry).try_exists().map_err(|e| e.to_string())? {
+        chrono_harness::load_selected_config(root, entry)
     } else {
-        Value::Null
-    };
+        Ok(Value::Null)
+    }
+}
+
+pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
+    let config = host_config(root)?;
     let program = installed(root, &config)?;
     if !query(root, &program, "check-project-registry-v1", registry)?.is_null() {
         return Err("E_PROTOCOL: invalid project registry response".into());
