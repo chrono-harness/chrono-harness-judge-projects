@@ -44,8 +44,8 @@ pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result
         query.routes.output_limit_bytes,
     )?;
     let work = || {
-        routes.check(&query.plan)?;
-        execute(&query.plan, &routes)
+        let dispatch = routes.dispatch(&query.plan)?;
+        execute(&query.plan, &routes, &dispatch)
     };
     let (results, diagnostic_error) = if let Some(level) = query.diagnostics {
         let level: LevelFilter = level

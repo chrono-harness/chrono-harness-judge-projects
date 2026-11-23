@@ -37,6 +37,31 @@ pub struct Operation {
     pub output_limit_bytes: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct Dispatch {
+    pub max_running: std::num::NonZeroUsize,
+    pub order: Vec<usize>,
+}
+
+impl Dispatch {
+    fn admit(&self, count: usize) -> Result<(), String> {
+        let mut seen = vec![false; count];
+        let invalid = "E_EXECUTION_PLAN: routes dispatch order must cover every operation once";
+        if self.order.len() != count {
+            return Err(invalid.into());
+        }
+        for &index in &self.order {
+            let visited = seen.get_mut(index).ok_or(invalid)?;
+            if *visited {
+                return Err(invalid.into());
+            }
+            *visited = true;
+        }
+        Ok(())
+    }
+}
+
 /// Resolve the host's installed routes command in the current declaration checkout.
 /// A transported plan can refer to a different original working directory.
 pub struct Routes<'a> {
@@ -154,6 +179,21 @@ impl<'a> Routes<'a> {
             return Err("E_PLAN_IDENTITY: routes response differs".into());
         }
         Ok(())
+    }
+    pub(super) fn dispatch(&self, plan: &Execution) -> Result<Dispatch, String> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Reply {
+            plan: String,
+            dispatch: Dispatch,
+        }
+        let reply: Reply = serde_json::from_value(self.query("dispatch-plan-v1", plan)?)
+            .map_err(|e| e.to_string())?;
+        if reply.plan != plan.identity {
+            return Err("E_PLAN_IDENTITY: routes response differs".into());
+        }
+        reply.dispatch.admit(plan.operations.len())?;
+        Ok(reply.dispatch)
     }
     pub fn check_receipt(
         &self,
