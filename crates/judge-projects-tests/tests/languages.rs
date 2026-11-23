@@ -128,3 +128,18 @@ fn language_v2_does_not_reinterpret_legacy_v1_pairs() {
     )
     .unwrap();
 }
+
+#[test]
+fn scoped_query_checks_only_the_affected_owner_pairs() {
+    for (script, owner) in [(false, "project:p"), (true, "script:p")] {
+        let (_root, values) = fixture(script, "rust", "python");
+        let registry = &values[PROJECTS];
+        let query = |owners: &[&str]| {
+            let request = json!({"registry":registry, "owners":owners});
+            chrono_judge_projects::check_pairs(serde_json::to_vec(&request).unwrap().as_slice())
+        };
+        query(&[]).unwrap();
+        let error = query(&[owner]).unwrap_err();
+        assert!(error.starts_with("E_TEST_LANGUAGE:"), "{error}");
+    }
+}

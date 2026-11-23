@@ -391,6 +391,18 @@ fn dedicated_pair<'a>(
     Ok((production, test))
 }
 
+/// Validate the caller's affected pairs in a fixed project registry.
+pub fn check_pairs(input: impl std::io::Read) -> Result<(), String> {
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Query {
+        registry: Value,
+        owners: BTreeSet<String>,
+    }
+    let query: Query = serde_json::from_reader(input).map_err(|error| error.to_string())?;
+    pair_declarations(&query.registry, &query.owners)
+}
+
 /// Check only affected explicit owner pairs; filesystem and output isolation stay in `pairs`.
 pub fn pair_declarations(registry: &Value, owners: &BTreeSet<String>) -> Result<(), String> {
     chrono_judge_registration::validate_projects(registry)?;
