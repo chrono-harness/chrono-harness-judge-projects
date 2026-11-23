@@ -28,3 +28,12 @@ path = "tests/impact_summary.rs"
 [[test]]
 name = "evidence_query"
 path = "tests/evidence_query.rs"
+
+[[test]]
+name = "plan_trace"
+path = "tests/plan_trace.rs"
+
+[dev-dependencies]
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
+tracing-tunnel = { version = "0.1.0", default-features = false, features = ["std"] }

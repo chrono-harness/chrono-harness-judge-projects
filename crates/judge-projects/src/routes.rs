@@ -90,21 +90,39 @@ impl<'a> Routes<'a> {
         } else {
             resolve_program(root, program, environment.get("PATH").map(String::as_str))?
         };
-        let observed = file_identity(&path)?.0;
+        let protocol = &registry.config()["protocol"];
+        Self::bound(
+            root,
+            &path,
+            expected,
+            environment,
+            protocol["timeout_seconds"]
+                .as_u64()
+                .ok_or("missing routes timeout")?,
+            serde_json::from_value(protocol["stdout_limit_bytes"].clone())
+                .map_err(|e| e.to_string())?,
+        )
+    }
+
+    pub(super) fn bound(
+        root: &'a Path,
+        path: &Path,
+        expected: Option<&str>,
+        environment: BTreeMap<String, String>,
+        timeout_seconds: u64,
+        output_limit_bytes: usize,
+    ) -> Result<Self, String> {
+        let observed = file_identity(path)?.0;
         if expected.is_some_and(|digest| digest != observed) {
             return Err("E_TOOL_BINDING: routes executable differs".into());
         }
-        let protocol = &registry.config()["protocol"];
         Ok(Self {
             root,
             program: path.to_str().ok_or("routes path is not UTF-8")?.into(),
             digest: observed,
             environment,
-            timeout_seconds: protocol["timeout_seconds"]
-                .as_u64()
-                .ok_or("missing routes timeout")?,
-            output_limit_bytes: serde_json::from_value(protocol["stdout_limit_bytes"].clone())
-                .map_err(|e| e.to_string())?,
+            timeout_seconds,
+            output_limit_bytes,
         })
     }
 
