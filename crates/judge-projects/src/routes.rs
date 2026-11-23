@@ -17,7 +17,7 @@ pub struct Method {
     pub tool: String,
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_contract: Option<chrono_harness::verified_verifier::OutputContract>,
+    pub output_contract: Option<crate::compiler::OutputContract>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

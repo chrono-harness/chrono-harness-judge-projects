@@ -7,7 +7,6 @@ use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 #[derive(Deserialize)]
@@ -69,35 +68,14 @@ pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
 fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<Value, String> {
     let program = program.canonicalize().map_err(|err| err.to_string())?;
     let runner = crate::host_runner(root)?;
-    let mut command = Command::new(&runner);
-    command
-        .current_dir(root)
-        .arg("exec-with-descriptors-v1")
-        .arg(&runner)
-        .arg("installed-query-v1")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    let request = json!({"root":root,"environment":"inherited","program":program,"operation":operation,"input":input});
-    let mut process = command.spawn().map_err(|e| e.to_string())?;
-    let stdin = process.stdin.take().expect("piped stdin");
-    let (output, written) = std::thread::scope(|scope| {
-        let sender = scope.spawn(move || serde_json::to_writer(stdin, &request));
-        (process.wait_with_output(), sender.join())
-    });
-    let out = output.map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let reason = String::from_utf8(out.stderr).map_err(|e| e.to_string())?;
-        return Err(if reason.is_empty() {
-            format!("registration {operation} {}", out.status)
-        } else {
-            reason.strip_suffix('\n').unwrap_or(&reason).into()
-        });
-    }
-    written
-        .map_err(|_| "registration input writer panicked")?
-        .map_err(|e| e.to_string())?;
-    chrono_harness::decode(&out.stdout)
+    crate::commands::query(
+        root,
+        &runner,
+        "installed-query-v1",
+        &json!({
+            "root":root,"environment":"inherited","program":program,"operation":operation,"input":input
+        }),
+    )
 }
 impl Registry {
     pub fn runner(&self, root: &Path) -> Result<PathBuf, String> {

@@ -1,5 +1,5 @@
 //! Capture compiler originals in the process owner before the operation releases its files.
-use crate::compiler::DependencyIo;
+use crate::compiler;
 use crate::routes::{Execution, Operation};
 use chrono_harness::{ProcessResult, wire};
 use serde::{Deserialize, Serialize};
@@ -12,8 +12,7 @@ pub struct Receipt {
     pub method: String,
     pub process: ProcessResult,
     pub compiler_dependency: Option<Result<Vec<u8>, String>>,
-    pub compiler_artifact:
-        Option<Result<chrono_harness::verified_verifier::CompiledArtifact, String>>,
+    pub compiler_artifact: Option<Result<compiler::Artifact, String>>,
     pub digest: String,
 }
 
@@ -22,26 +21,15 @@ impl Receipt {
         plan: &Execution,
         op: &Operation,
         process: ProcessResult,
+        runner: &std::path::Path,
     ) -> Result<Self, String> {
+        let observed = compiler::observe(&plan.root, runner, op, &process)?;
         let mut receipt = Self {
             plan: plan.identity.clone(),
             operation: op.method.operation.clone(),
             method: wire::digest(&op.method)?,
-            compiler_dependency: chrono_harness::verified_verifier::sources::observe_dependency(
-                &op.method.output_contract,
-                &op.method.argv,
-                process.exit_code,
-                process.failure.is_some(),
-                op.output_limit_bytes,
-                &DependencyIo(&plan.root),
-            ),
-            compiler_artifact: chrono_harness::verified_verifier::observe_artifact(
-                &op.method.output_contract,
-                &op.method.argv,
-                process.exit_code,
-                process.failure.is_some(),
-                &DependencyIo(&plan.root),
-            ),
+            compiler_dependency: observed.dependency,
+            compiler_artifact: observed.artifact,
             process,
             digest: String::new(),
         };

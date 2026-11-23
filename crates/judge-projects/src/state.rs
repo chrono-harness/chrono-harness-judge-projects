@@ -238,9 +238,12 @@ impl Operation {
                 if !owned_compiler_output(
                     output == &expected,
                     !op.method.operation.contains('/'),
-                    chrono_harness::verified_verifier::canonical_verifier_arguments(
-                        &op.method.argv,
-                    ),
+                    crate::commands::query(
+                        &plan.root,
+                        runner,
+                        "compiler-output-v1",
+                        &json!({"operation":"canonical","argv":op.method.argv}),
+                    )?,
                 ) {
                     return Err(
                         "compiler output in the run directory must belong to this operation".into(),

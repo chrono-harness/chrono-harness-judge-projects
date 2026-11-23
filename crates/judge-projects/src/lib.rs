@@ -282,7 +282,7 @@ fn execute_operation(
         };
         state = Some(state::Operation::begin(plan, index, plan_original, runner)?);
         let process = state.as_ref().unwrap().execute(&spec, &tool.sha256)?;
-        Receipt::observe(plan, op, process)
+        Receipt::observe(plan, op, process, runner)
     })();
     let (receipt, error, status) = match result {
         Ok(receipt) => {
