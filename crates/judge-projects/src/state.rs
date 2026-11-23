@@ -15,6 +15,8 @@ pub fn owned_compiler_output(exact_name: bool, single_component: bool, canonical
 }
 
 #[cfg(not(verus_keep_ghost))]
+use crate::routes::Execution;
+#[cfg(not(verus_keep_ghost))]
 use crate::verified_state::{self, OperationObservation};
 #[cfg(not(verus_keep_ghost))]
 use crate::{OperationResult, Results};
@@ -22,8 +24,6 @@ use crate::{OperationResult, Results};
 use chrono_harness::retained_artifacts::retention::{self, Inventory, Publication};
 #[cfg(not(verus_keep_ghost))]
 use chrono_harness::{ProcessEvidence, no_symlink_parents, sha256};
-#[cfg(not(verus_keep_ghost))]
-use chrono_judge_routes::Execution;
 #[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
 #[cfg(not(verus_keep_ghost))]
