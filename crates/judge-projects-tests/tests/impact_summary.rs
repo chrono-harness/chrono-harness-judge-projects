@@ -1,5 +1,4 @@
-#[path = "../../judge-projects/src/impact.rs"]
-mod impact;
+use chrono_judge_projects::decode_impact;
 use serde_json::{Value, json};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -8,7 +7,7 @@ fn the_installed_decoder_receives_the_whole_impact_and_returns_affected_and_reti
     let input = json!({"closure":{"reached":{"test:kept":[]}},"retired_tests":["old"],"edges":[]});
     let protocol = json!({"timeout_seconds":7,"stdout_limit_bytes":2048});
     let env = BTreeMap::from([("PATH".into(), "/tools".into())]);
-    let result = impact::decode(&input, &protocol, &env, |cmd, bytes| {
+    let result = decode_impact(&input, &protocol, &env, |cmd, bytes| {
         assert_eq!(cmd.program, "chrono-judge-filemap");
         assert_eq!(cmd.args, ["impact-summary"]);
         assert_eq!(cmd.env, env);
@@ -35,7 +34,7 @@ fn the_installed_decoder_receives_the_whole_impact_and_returns_affected_and_reti
         ),
     ] {
         assert!(
-            impact::decode(&input, &protocol, &env, |_, _| outcome)
+            decode_impact(&input, &protocol, &env, |_, _| outcome)
                 .unwrap_err()
                 .starts_with(error)
         );

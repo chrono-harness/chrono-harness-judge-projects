@@ -3,6 +3,7 @@ mod compiler;
 pub mod evidence_query;
 pub mod execute_query;
 mod impact;
+pub use impact::decode as decode_impact;
 mod pair_checks;
 pub mod plan_trace;
 mod receipt;
@@ -15,7 +16,7 @@ use chrono_harness::{
     wire::{self, Binding, Finding, Request, Response, Status},
 };
 use chrono_judge_registration::Registrations;
-use receipt::Receipt;
+pub use receipt::Receipt;
 use routes::{Execution, Routes};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
