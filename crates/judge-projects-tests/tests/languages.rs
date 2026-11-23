@@ -1,14 +1,40 @@
-use chrono_judge_projects::pairs;
-use chrono_registration_fixture as support;
-use serde_json::json;
-use std::{collections::BTreeSet, fs};
-use support::*;
+#[path = "../../judge-projects/src/pair_checks.rs"]
+mod pair_checks;
+#[path = "../../judge-projects/src/verified_languages.rs"]
+mod verified_languages;
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs;
 
-fn fixture(script: bool, implementation: &str, testing: &str) -> (tempfile::TempDir, Values) {
+struct PairCase {
+    root: tempfile::TempDir,
+    registry: Value,
+    filemap: Value,
+    definitions: BTreeMap<String, String>,
+    test_owner: String,
+}
+impl PairCase {
+    fn check(&self, affected: &BTreeSet<String>) -> Result<(), String> {
+        pair_checks::check(
+            self.root.path(),
+            &self.registry,
+            &self.filemap,
+            &[],
+            affected,
+            |node| {
+                self.definitions
+                    .get(node)
+                    .map(String::as_str)
+                    .into_iter()
+                    .collect()
+            },
+            &BTreeMap::from([(self.test_owner.as_str(), vec!["test:t"])]),
+        )
+    }
+}
+fn fixture(script: bool, implementation: &str, testing: &str) -> PairCase {
     let root = tempfile::tempdir().unwrap();
-    let mut values = values();
-    let registry = values.get_mut(PROJECTS).unwrap();
-    registry["schema_version"] = json!(2);
+    let mut registry = json!({"schema_version":2,"status":"active","owners":["host","p","t"],"projects":[],"scripts":[]});
     let production = json!({"execute":{"operation":"host.produce","tool":"sh","argv":[]}});
     let verification = json!({"execute":{"operation":"host.verify","tool":"sh","argv":[]}});
     if script {
@@ -24,22 +50,32 @@ fn fixture(script: bool, implementation: &str, testing: &str) -> (tempfile::Temp
         ]);
     }
     let prefix = if script { "script" } else { "project" };
-    let filemap = values.get_mut(FM).unwrap();
+    let production_owner = format!("{prefix}:p");
+    let test_owner = format!("{prefix}:t");
+    let definitions = BTreeMap::from([
+        (production_owner.clone(), production_owner.clone()),
+        (test_owner.clone(), test_owner.clone()),
+        ("test:t".into(), test_owner.clone()),
+    ]);
+    let mut files = vec![];
     for (name, owner) in [("sources/value.data", "p"), ("assays/contract.opaque", "t")] {
         let path = root.path().join(name);
         fs::create_dir_all(path.parent().unwrap()).unwrap();
         fs::write(path, "opaque fixture input").unwrap();
-        let mut entry = file(name, json!([]));
-        entry["owner"] = json!(owner);
-        filemap["files"].as_array_mut().unwrap().push(entry);
+        files.push(json!({"path":name,"owner":owner}));
     }
-    filemap["project_edges"] = json!([
-        edge(&format!("{prefix}:p"), "test-execution", "test:t"),
-        edge(&format!("{prefix}:t"), "test-execution", "test:t")
-    ]);
-    (root, values)
+    let filemap = json!({"files":files,"project_edges":[
+        {"from": production_owner, "kind":"test-execution","to":"test:t"},
+        {"from": test_owner, "kind":"test-execution","to":"test:t"}
+    ]});
+    PairCase {
+        root,
+        registry,
+        filemap,
+        definitions,
+        test_owner,
+    }
 }
-
 #[test]
 fn same_declared_language_accepts_arbitrary_host_languages_and_paths() {
     for script in [false, true] {
@@ -51,14 +87,14 @@ fn same_declared_language_accepts_arbitrary_host_languages_and_paths() {
             "shell",
             "future host language",
         ] {
-            let (root, values) = fixture(script, language, language);
+            let case = fixture(script, language, language);
             let prefix = if script { "script" } else { "project" };
             for node in [
                 format!("{prefix}:p"),
                 format!("{prefix}:t"),
                 "test:t".into(),
             ] {
-                pairs(root.path(), &load(&values), &BTreeSet::from([node])).unwrap();
+                case.check(&BTreeSet::from([node])).unwrap();
             }
         }
     }
@@ -69,15 +105,15 @@ fn shell_python_exception_is_explicit_and_directional() {
     for script in [false, true] {
         let prefix = if script { "script" } else { "project" };
         let affected = BTreeSet::from([format!("{prefix}:p")]);
-        let (root, values) = fixture(script, "shell", "python");
-        pairs(root.path(), &load(&values), &affected).unwrap();
+        let case = fixture(script, "shell", "python");
+        case.check(&affected).unwrap();
         for (implementation, testing) in [
             ("python", "shell"),
             ("rust", "python"),
             ("go", "typescript"),
         ] {
-            let (root, values) = fixture(script, implementation, testing);
-            let error = pairs(root.path(), &load(&values), &affected).unwrap_err();
+            let case = fixture(script, implementation, testing);
+            let error = case.check(&affected).unwrap_err();
             assert!(error.starts_with("E_TEST_LANGUAGE:"), "{error}");
             assert!(error.contains(implementation) && error.contains(testing));
         }
@@ -92,48 +128,38 @@ fn language_changes_check_the_selected_pair_and_leave_unrelated_pairs_alone() {
         serde_json::from_value(impacts[name]["reached"].clone()).unwrap()
     };
     for script in [false, true] {
-        let (root, old) = fixture(script, "rust", "rust");
-        let mut new = old.clone();
+        let mut case = fixture(script, "rust", "rust");
         let collection = if script { "scripts" } else { "projects" };
-        new.get_mut(PROJECTS).unwrap()[collection][1]["language"] = json!("python");
-        let after = load(&new);
+        case.registry[collection][1]["language"] = json!("python");
         let affected = reached(if script {
             "script_language"
         } else {
             "project_language"
         });
         assert!(
-            pairs(root.path(), &after, &affected)
+            case.check(&affected)
                 .unwrap_err()
                 .starts_with("E_TEST_LANGUAGE:")
         );
-        pairs(root.path(), &after, &reached("docs")).unwrap();
+        case.check(&reached("docs")).unwrap();
     }
 }
 
 #[test]
 fn language_v2_does_not_reinterpret_legacy_v1_pairs() {
-    let (root, mut values) = fixture(false, "rust", "python");
-    values.get_mut(PROJECTS).unwrap()["schema_version"] = json!(1);
-    for row in values.get_mut(PROJECTS).unwrap()["projects"]
-        .as_array_mut()
-        .unwrap()
-    {
+    let mut case = fixture(false, "rust", "python");
+    case.registry["schema_version"] = json!(1);
+    for row in case.registry["projects"].as_array_mut().unwrap() {
         row.as_object_mut().unwrap().remove("language");
     }
-    pairs(
-        root.path(),
-        &load(&values),
-        &BTreeSet::from(["project:p".into()]),
-    )
-    .unwrap();
+    case.check(&BTreeSet::from(["project:p".into()])).unwrap();
 }
 
 #[test]
 fn scoped_query_checks_only_the_affected_owner_pairs() {
     for (script, owner) in [(false, "project:p"), (true, "script:p")] {
-        let (_root, values) = fixture(script, "rust", "python");
-        let registry = &values[PROJECTS];
+        let case = fixture(script, "rust", "python");
+        let registry = &case.registry;
         let query = |owners: &[&str]| {
             let request = json!({"registry":registry, "owners":owners});
             chrono_judge_projects::check_pairs(serde_json::to_vec(&request).unwrap().as_slice())
@@ -141,5 +167,20 @@ fn scoped_query_checks_only_the_affected_owner_pairs() {
         query(&[]).unwrap();
         let error = query(&[owner]).unwrap_err();
         assert!(error.starts_with("E_TEST_LANGUAGE:"), "{error}");
+    }
+}
+
+#[test]
+fn test_alias_alone_checks_the_defining_pair_and_ignores_unrelated_changes() {
+    let aliases = BTreeSet::from(["test:t".into()]);
+    for script in [false, true] {
+        let case = fixture(script, "rust", "python");
+        assert!(
+            case.check(&aliases)
+                .unwrap_err()
+                .starts_with("E_TEST_LANGUAGE:")
+        );
+        case.check(&BTreeSet::from(["file:doc.txt".into()]))
+            .unwrap();
     }
 }

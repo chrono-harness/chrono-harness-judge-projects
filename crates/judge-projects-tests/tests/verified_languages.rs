@@ -3,7 +3,7 @@
 #[path = "../../judge-projects/src/verified_languages.rs"]
 mod languages;
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::verus;
+use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 

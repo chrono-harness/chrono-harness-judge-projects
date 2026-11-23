@@ -1,6 +1,7 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
 pub mod evidence_query;
 mod impact;
+mod pair_checks;
 mod state;
 mod verified_languages;
 mod verified_state;
@@ -332,66 +333,6 @@ fn execute_operation(plan: &Execution, index: usize, plan_original: &Value) -> O
     }
     row
 }
-fn dedicated_pair<'a>(
-    registry: &Value,
-    collection: &'a [Value],
-    prefix: &str,
-    test_field: &str,
-    row: &'a Value,
-) -> Result<(&'a Value, &'a Value), String> {
-    let (production, test) = if let Some(test) = row[test_field].as_str() {
-        (
-            row,
-            collection
-                .iter()
-                .find(|p| p["id"] == test)
-                .ok_or("E_TEST_PAIR: missing dedicated test")?,
-        )
-    } else {
-        let prod = row["tests_for"]
-            .as_str()
-            .ok_or("E_TEST_PAIR: tests_for missing")?;
-        (
-            collection
-                .iter()
-                .find(|p| p["id"] == prod)
-                .ok_or("E_TEST_PAIR: missing production")?,
-            row,
-        )
-    };
-    let prod_id = production["id"].as_str().unwrap();
-    let test_id = test["id"].as_str().unwrap();
-    if production[test_field] != test["id"]
-        || test["tests_for"] != production["id"]
-        || prod_id == test_id
-        || collection
-            .iter()
-            .filter(|p| p[test_field] == test["id"])
-            .count()
-            != 1
-        || collection
-            .iter()
-            .filter(|p| p["tests_for"] == production["id"])
-            .count()
-            != 1
-        || prefix == "project" && (production["kind"] != "production" || test["kind"] != "test")
-    {
-        return Err("E_TEST_PAIR: nonreciprocal/shared dedicated pair".into());
-    }
-    if registry["schema_version"] == 2 {
-        let implementation = production["language"].as_str().unwrap();
-        let testing = test["language"].as_str().unwrap();
-        if !verified_languages::dedicated_test_language(implementation, testing) {
-            return Err(format!(
-                "E_TEST_LANGUAGE: {prefix}:{prod_id} declares {implementation:?}, \
-             but its dedicated test {prefix}:{test_id} declares {testing:?}; \
-             require the same language or the declared shell-to-python exception"
-            ));
-        }
-    }
-    Ok((production, test))
-}
-
 /// Validate the caller's affected pairs in a fixed project registry.
 pub fn check_pairs(input: impl std::io::Read) -> Result<(), String> {
     #[derive(Deserialize)]
@@ -415,7 +356,7 @@ pub fn pair_declarations(registry: &Value, owners: &BTreeSet<String>) -> Result<
         for row in collection {
             let id = row["id"].as_str().unwrap();
             if owners.contains(&format!("{prefix}:{id}")) {
-                dedicated_pair(registry, collection, prefix, test_field, row)?;
+                pair_checks::dedicated_pair(registry, collection, prefix, test_field, row)?;
             }
         }
     }
@@ -423,116 +364,29 @@ pub fn pair_declarations(registry: &Value, owners: &BTreeSet<String>) -> Result<
 }
 
 pub fn pairs(root: &Path, r: &Registrations, affected: &BTreeSet<String>) -> Result<(), String> {
-    let projects = r.projects()["projects"].as_array().unwrap();
-    let scripts = r.projects()["scripts"].as_array().unwrap();
-    let files = r.filemap()["files"].as_array().unwrap();
-    let registered = |path: &str, owner: &str| -> Result<(), String> {
-        let matches: Vec<_> = files
-            .iter()
-            .filter(|f| f["path"] == path && f["owner"] == owner)
-            .collect();
-        if matches.len() != 1 || !root.join(path).is_file() {
-            return Err(format!(
-                "E_TEST_PAIR: missing/exclusive owner {owner}: {path}"
-            ));
-        }
-        Ok(())
-    };
-    let edge = |from: &str, kind: &str, to: &str| {
-        r.filemap()["project_edges"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .any(|e| e["from"] == from && e["kind"] == kind && e["to"] == to)
-    };
-    let mut owners = BTreeSet::new();
-    for id in affected {
-        if let Some(node) = r.node_data().get(id) {
-            for d in &node.definitions {
-                owners.insert(d.identity.clone());
-            }
+    let nodes = r.node_data();
+    let bindings = r.test_bindings();
+    let mut tests_for_owner: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (test, rows) in &bindings {
+        for row in rows {
+            tests_for_owner.entry(&row.owner).or_default().push(test);
         }
     }
-    for (collection, prefix, test_field) in [
-        (projects, "project", "test_project"),
-        (scripts, "script", "test_script"),
-    ] {
-        for row in collection {
-            let id = row["id"].as_str().unwrap();
-            if !owners.contains(&format!("{prefix}:{id}")) {
-                continue;
-            }
-            let (production, test) =
-                dedicated_pair(r.projects(), collection, prefix, test_field, row)?;
-            let prod_id = production["id"].as_str().unwrap();
-            let test_id = test["id"].as_str().unwrap();
-            if !edge(
-                &format!("{prefix}:{prod_id}"),
-                "test-execution",
-                &format!("test:{test_id}"),
-            ) {
-                return Err("E_TEST_PAIR: missing explicit pair execution edge".into());
-            }
-            for (identity, bindings) in r.test_bindings() {
-                if bindings
-                    .iter()
-                    .any(|b| b.owner == format!("{prefix}:{test_id}"))
-                    && !edge(&format!("{prefix}:{prod_id}"), "test-execution", &identity)
-                {
-                    return Err(format!(
-                        "E_TEST_PAIR: missing explicit group execution edge {identity}"
-                    ));
-                }
-            }
-            for member in [production, test] {
-                let owner = member["id"].as_str().unwrap();
-                if prefix == "script" {
-                    let path = member["path"].as_str().unwrap();
-                    registered(path, owner)?;
-                    if collection.iter().filter(|p| p["path"] == path).count() != 1 {
-                        return Err("E_TEST_PAIR: shared script path".into());
-                    }
-                }
-                // Legacy paths remain optional opaque owned inputs. No language parsing,
-                // ancestor discovery or inferred output directory belongs to this judge.
-                for field in ["manifest", "lockfile"] {
-                    if let Some(path) = member[field].as_str() {
-                        registered(path, owner)?;
-                    }
-                }
-                let owned: Vec<_> = files.iter().filter(|f| f["owner"] == owner).collect();
-                if owned.is_empty() {
-                    return Err(format!(
-                        "E_TEST_PAIR: project {owner} has no registered files"
-                    ));
-                }
-                for file in owned {
-                    registered(file["path"].as_str().unwrap(), owner)?;
-                }
-                let artifacts = r.config()["artifacts"].as_array().unwrap();
-                for artifact in artifacts.iter().filter(|a| a["owner"] == owner) {
-                    let path = artifact["path"].as_str().unwrap();
-                    if files
-                        .iter()
-                        .any(|f| f["path"].as_str().unwrap().starts_with(path))
-                    {
-                        return Err(format!(
-                            "E_TEST_PAIR: generated output contains registered input: {path}"
-                        ));
-                    }
-                    for other in artifacts.iter().filter(|a| a["owner"] != owner) {
-                        let other_path = other["path"].as_str().unwrap();
-                        if path.starts_with(other_path) || other_path.starts_with(path) {
-                            return Err(format!(
-                                "E_TEST_PAIR: overlapping registered outputs: {path}, {other_path}"
-                            ));
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(())
+    pair_checks::check(
+        root,
+        r.projects(),
+        r.filemap(),
+        r.config()["artifacts"].as_array().unwrap(),
+        affected,
+        |node| {
+            nodes
+                .get(node)
+                .into_iter()
+                .flat_map(|node| node.definitions.iter().map(|d| d.identity.as_str()))
+                .collect()
+        },
+        &tests_for_owner,
+    )
 }
 pub fn snapshot_with_reader(
     root: &Path,

@@ -1,7 +1,7 @@
 //! 专属测试的语言配对；直接消费登记中的完整文本。
 #![allow(unexpected_cfgs)]
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::verus;
+use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
