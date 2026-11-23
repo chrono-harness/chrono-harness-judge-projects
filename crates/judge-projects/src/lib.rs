@@ -420,8 +420,6 @@ fn collect_reports(
     registrations: &Registry,
     effective: &Value,
 ) -> Result<(Results, CollectedCompletion), String> {
-    let _read_scope =
-        chrono_harness::retained_artifacts::retention::read_scope(&req.candidate.root)?;
     let chrono_harness::units::Scope::Collect { manifest } =
         req.scope.as_ref().ok_or("collection scope missing")?
     else {
@@ -431,6 +429,11 @@ fn collect_reports(
         serde_json::from_value(req.observations["execution_units"]["units"].clone())
             .map_err(|e| format!("E_COLLECTION_INPUT: units: {e}"))?;
     let root = &req.candidate.root;
+    let mut originals = runtime_session::Session::open(
+        root,
+        &registrations.runner(root)?,
+        "retained-artifacts-v1",
+    )?;
     let mut reader =
         runtime_session::Session::open(root, &registrations.runner(root)?, "judge-evidence-v1")?;
     let required: Vec<String> =
@@ -456,10 +459,7 @@ fn collect_reports(
         .as_u64()
         .filter(|n| *n > 0 && *n <= 64 * 1024 * 1024)
         .ok_or("E_COLLECTION_INPUT: invalid report limit")?;
-    let read_bounded = |path: &str, limit: u64| {
-        chrono_harness::units::read_bounded(&req.candidate.root, path, limit)
-    };
-    let bytes = read_bounded(&manifest_path, manifest_limit)
+    let bytes = report_bytes(&mut originals, &manifest_path, None, manifest_limit)
         .map_err(|e| format!("E_COLLECTION_INPUT: manifest: {e}"))?;
     let manifest_sha256 = chrono_harness::sha256(&bytes);
     let manifest: chrono_harness::units::FullManifest = chrono_harness::decode(&bytes)?;
@@ -486,13 +486,7 @@ fn collect_reports(
         {
             return Err("E_COLLECTION_INPUT: unknown or duplicate unit report".into());
         }
-        let expected_path = chrono_harness::prepared::original_path(
-            &chrono_harness::prepared::Original {
-                path: units[&input.unit].report_path.clone(),
-                sha256: input.sha256.clone(),
-            },
-            input.artifacts.as_ref(),
-        )?;
+        let expected_path: String = originals.call(json!({"operation":"resolve-original","original":{"path":units[&input.unit].report_path,"sha256":input.sha256},"transport":input.artifacts}))?;
         if input.path != expected_path {
             return Err(format!(
                 "E_COLLECTION_INPUT: unit report path differs from registration: {}",
@@ -506,7 +500,7 @@ fn collect_reports(
         {
             return Err("E_COLLECTION_INPUT: report path collision/overlap".into());
         }
-        let report_bytes = read_bounded(&input.path, report_limit)
+        let report_bytes = report_bytes(&mut originals, &input.path, None, report_limit)
             .map_err(|e| format!("E_COLLECTION_INPUT: {}: {e}", input.unit))?;
         if chrono_harness::sha256(&report_bytes) != input.sha256 {
             return Err(format!(
@@ -538,14 +532,11 @@ fn collect_reports(
         }
         if registrations.config()["schema_version"] == 4 {
             if let Some(transport) = &input.artifacts {
-                chrono_harness::prepared::validate_portable_binding(
-                    &req.candidate.root,
-                    &report["request"]["observations"]["preparation"],
-                    Some(transport),
-                )?;
+                originals.call::<()>(json!({"operation":"check-preparation","binding":report["request"]["observations"]["preparation"],"transport":transport}))?;
             }
         }
         let unit_results = validate_unit_report(
+            &mut originals,
             &mut reader,
             req,
             registrations,
@@ -622,12 +613,7 @@ fn collect_reports(
                 input.unit
             ));
         }
-        let retained_artifacts = chrono_harness::retained_artifacts::restage(
-            &req.candidate.root,
-            &report["artifacts"],
-            input.artifacts.as_ref(),
-            ".chrono-harness/state/imported/",
-        )?;
+        let retained_artifacts: Value = originals.call(json!({"operation":"restage-map","artifacts":report["artifacts"],"transport":input.artifacts,"directory":".chrono-harness/state/imported/"}))?;
         let retained_path = format!(".chrono-harness/state/import-{}.json", input.sha256);
         let destination = chrono_harness::no_symlink_parents(&req.candidate.root, &retained_path)?;
         match fs::OpenOptions::new()
@@ -732,6 +718,7 @@ fn collect_reports(
         completion: Some(completion.clone()),
         operation_state: None,
     };
+    originals.close()?;
     reader.close()?;
     Ok((results, completion))
 }
@@ -741,6 +728,7 @@ fn collect_reports(
 /// original coordinates; only typed endpoint and declaration projections are
 /// compared with the current collection request.
 fn validate_unit_report(
+    originals: &mut runtime_session::Session,
     reader: &mut runtime_session::Session,
     req: &Request,
     registrations: &Registry,
@@ -834,18 +822,16 @@ fn validate_unit_report(
             Ok((response.judge_id.clone(), response))
         })
         .collect::<Result<_, String>>()?;
-    let resolved = chrono_harness::retained_artifacts::resolve_map(&report["artifacts"], closure)?;
+    let resolved: Value = originals.call(
+        json!({"operation":"resolve-map","artifacts":report["artifacts"],"closure":closure}),
+    )?;
     let artifacts = &resolved;
     if registrations.config()["schema_version"] == 4 {
-        chrono_harness::prepared::validate_retained_binding(
-            declaration_root,
-            &top_request.observations["preparation"],
-            transport,
-            Some(artifacts),
-        )?;
+        originals.call::<()>(json!({"operation":"check-preparation","binding":top_request.observations["preparation"],"transport":transport,"artifacts":artifacts}))?;
     }
 
     let effective = validate_retained_request_at(
+        originals,
         &top_request,
         registrations,
         artifacts,
@@ -914,13 +900,8 @@ fn validate_unit_report(
                 .map(|f| serde_json::to_value(f).unwrap()),
         );
         for evidence in &response.evidence {
-            let identity = chrono_harness::retained_artifacts::identity(
-                declaration_root,
-                artifacts,
-                &evidence.path,
-                transport,
-            )?;
-            if identity.0 != evidence.sha256 {
+            let identity: Value = originals.call(json!({"operation":"artifact-identity","path":evidence.path,"artifacts":artifacts,"transport":transport}))?;
+            if identity["sha256"] != evidence.sha256 {
                 return Err("E_COLLECTION_INPUT: original judge artifact differs".into());
             }
         }
@@ -1128,9 +1109,39 @@ fn validate_unit_report(
     Ok(results)
 }
 
+fn artifact_text(
+    originals: &mut runtime_session::Session,
+    path: &str,
+    artifacts: &Value,
+    transport: Option<&chrono_harness::prepared::ArtifactTransport>,
+) -> Result<Vec<u8>, String> {
+    originals
+        .call::<String>(json!({
+            "operation":"read-artifact-text","path":path,"artifacts":artifacts,"transport":transport
+        }))
+        .map(String::into_bytes)
+}
+
+fn report_bytes(
+    originals: &mut runtime_session::Session,
+    path: &str,
+    artifacts: Option<&Value>,
+    limit: u64,
+) -> Result<Vec<u8>, String> {
+    if let Some(artifacts) = artifacts {
+        return artifact_text(originals, path, artifacts, None);
+    }
+    originals
+        .call::<String>(json!({
+            "operation":"read-bounded-text","path":path,"limit":limit
+        }))
+        .map(String::into_bytes)
+}
+
 /// Validate the transported original context and declared input closure for
 /// both contributions and their finalized collector proof.
 fn validate_retained_request_at(
+    originals: &mut runtime_session::Session,
     req: &Request,
     r: &Registry,
     artifacts: &Value,
@@ -1138,10 +1149,10 @@ fn validate_retained_request_at(
     transport: Option<&chrono_harness::prepared::ArtifactTransport>,
 ) -> Result<Value, String> {
     req.validate()?;
-    let ctx = chrono_harness::json(&chrono_harness::retained_artifacts::bytes(
-        root,
-        artifacts,
+    let ctx = chrono_harness::json(&artifact_text(
+        originals,
         req.context.path.to_str().ok_or("context address")?,
+        artifacts,
         transport,
     )?)?;
     if wire::digest(&ctx)? != req.context.sha256
@@ -1151,9 +1162,8 @@ fn validate_retained_request_at(
         return Err("E_COLLECTION_INPUT: original context bytes differ".into());
     }
     if let Some(path) = ctx["retained_inputs"].as_str() {
-        if chrono_harness::json(&chrono_harness::retained_artifacts::bytes(
-            root, artifacts, path, transport,
-        )?)? != req.observations["retained"]
+        if chrono_harness::json(&artifact_text(originals, path, artifacts, transport)?)?
+            != req.observations["retained"]
         {
             return Err("E_COLLECTION_INPUT: original retained snapshot differs".into());
         }
@@ -1316,6 +1326,7 @@ fn unit_tools(report: &Value) -> Result<Value, String> {
 }
 /// Revalidate the original source closure for every complete consumer, without historical execution.
 fn verify_completion(
+    originals: &mut runtime_session::Session,
     req: &Request,
     r: &Registry,
     effective: &Value,
@@ -1324,8 +1335,6 @@ fn verify_completion(
     artifacts: Option<&Value>,
     declaration_root: &Path,
 ) -> Result<(), String> {
-    let _read_scope =
-        chrono_harness::retained_artifacts::retention::read_scope(&req.candidate.root)?;
     let completion = results
         .completion
         .as_ref()
@@ -1358,27 +1367,7 @@ fn verify_completion(
     let manifest_bound = r.config()["execution_units"]["collection_limits"]["manifest_bytes"]
         .as_u64()
         .ok_or("manifest bound")?;
-    let manifest_bytes = if let Some(artifacts) = artifacts {
-        chrono_harness::retained_artifacts::bytes(
-            declaration_root,
-            artifacts,
-            &completion.source,
-            None,
-        )?
-    } else {
-        let _manifest = chrono_harness::retained_artifacts::retention::read_guard(
-            &req.candidate.root,
-            &completion.source,
-        )?;
-        let path = chrono_harness::no_symlink_parents(&req.candidate.root, &completion.source)?;
-        let bound = r.config()["execution_units"]["collection_limits"]["manifest_bytes"]
-            .as_u64()
-            .ok_or("manifest bound")?;
-        if fs::metadata(&path).map_err(|e| e.to_string())?.len() > bound {
-            return Err("manifest bound".into());
-        }
-        fs::read(path).map_err(|e| e.to_string())?
-    };
+    let manifest_bytes = report_bytes(originals, &completion.source, artifacts, manifest_bound)?;
     if manifest_bytes.len() as u64 > manifest_bound
         || chrono_harness::sha256(&manifest_bytes) != completion.source_sha256
     {
@@ -1440,19 +1429,7 @@ fn verify_completion(
         {
             return Err("E_COLLECTION_INPUT: completion source set".into());
         }
-        let bytes = if let Some(artifacts) = artifacts {
-            chrono_harness::retained_artifacts::bytes(declaration_root, artifacts, address, None)?
-        } else {
-            let _retention = chrono_harness::retained_artifacts::retention::read_guard(
-                &req.candidate.root,
-                address,
-            )?;
-            let p = chrono_harness::no_symlink_parents(&req.candidate.root, address)?;
-            if fs::metadata(&p).map_err(|e| e.to_string())?.len() > limit {
-                return Err("original report bound".into());
-            }
-            fs::read(p).map_err(|e| e.to_string())?
-        };
+        let bytes = report_bytes(originals, address, artifacts, limit)?;
         if bytes.len() as u64 > limit
             || source["sha256"] != chrono_harness::sha256(&bytes)
             || address
@@ -1479,7 +1456,9 @@ fn verify_completion(
                 warnings.push(json!({"unit":unit,"finding":finding}));
             }
         }
+        let resolved: Value = originals.call(json!({"operation":"resolve-map","artifacts":source.get("retained_artifacts").unwrap_or(&json!({})),"closure":artifacts}))?;
         let verified = validate_unit_report(
+            originals,
             &mut reader,
             req,
             r,
@@ -1492,10 +1471,7 @@ fn verify_completion(
             effective,
             declaration_root,
             None,
-            Some(&chrono_harness::retained_artifacts::resolve_map(
-                source.get("retained_artifacts").unwrap_or(&json!({})),
-                artifacts,
-            )?),
+            Some(&resolved),
         )?;
         for (test, status) in verified.tests {
             tests.insert(test.clone(), status);

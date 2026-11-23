@@ -39,9 +39,15 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
     let registrations =
         crate::registration::views(current, &mut reader, &mut Default::default(), false)?;
     reader.close()?;
+    let mut originals = crate::runtime_session::Session::open(
+        root,
+        &registrations.runner(root)?,
+        "retained-artifacts-v1",
+    )?;
     let (request, artifacts) = if let Some(retained) = &query.retained {
         let original = &retained.request;
         let observed = validate_retained_request_at(
+            &mut originals,
             original,
             &registrations,
             &retained.artifacts,
@@ -53,15 +59,16 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
         }
         (
             original,
-            Some(chrono_harness::retained_artifacts::transport_map(
-                &retained.artifacts,
-                None,
-            )?),
+            Some(
+                originals
+                    .call(json!({"operation":"transport-map","artifacts":retained.artifacts}))?,
+            ),
         )
     } else {
         (current, None)
     };
     verify_completion(
+        &mut originals,
         request,
         &registrations,
         &query.effective_inputs,
@@ -69,5 +76,6 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
         &query.results,
         artifacts.as_ref(),
         root,
-    )
+    )?;
+    originals.close()
 }
