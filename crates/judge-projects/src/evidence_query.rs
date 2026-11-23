@@ -1,7 +1,7 @@
 //! Read the public project execution results or verify a retained collection.
 use crate::routes::Execution;
+use crate::wire::Request;
 use crate::{Results, validate_retained_request_at, verify_completion};
-use chrono_harness::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{io::Read, path::Path};
@@ -31,7 +31,7 @@ struct Collection {
 pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
     let query: Collection = serde_json::from_reader(input).map_err(|error| error.to_string())?;
     let current = &query.request;
-    current.validate()?;
+    current.validate_at(root, &crate::host_runner(root)?)?;
     if current.candidate.root != root {
         return Err("collection declaration root differs from current checkout".into());
     }
@@ -39,9 +39,15 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
     let registrations =
         crate::registration::views(current, &mut reader, &mut Default::default(), false)?;
     reader.close()?;
+    let mut originals = crate::runtime_session::Session::open(
+        root,
+        &registrations.runner(root)?,
+        "retained-artifacts-v1",
+    )?;
     let (request, artifacts) = if let Some(retained) = &query.retained {
         let original = &retained.request;
         let observed = validate_retained_request_at(
+            &mut originals,
             original,
             &registrations,
             &retained.artifacts,
@@ -53,15 +59,16 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
         }
         (
             original,
-            Some(chrono_harness::retained_artifacts::transport_map(
-                &retained.artifacts,
-                None,
-            )?),
+            Some(
+                originals
+                    .call(json!({"operation":"transport-map","artifacts":retained.artifacts}))?,
+            ),
         )
     } else {
         (current, None)
     };
     verify_completion(
+        &mut originals,
         request,
         &registrations,
         &query.effective_inputs,
@@ -69,5 +76,6 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
         &query.results,
         artifacts.as_ref(),
         root,
-    )
+    )?;
+    originals.close()
 }

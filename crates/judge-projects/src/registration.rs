@@ -1,13 +1,12 @@
 //! Read registration projections for the executor and replay original declarations.
 use crate::git_reader::Reader;
 use crate::routes::Scheduling;
-use chrono_harness::wire::Request;
+use crate::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
 };
 
 #[derive(Deserialize)]
@@ -43,16 +42,75 @@ fn installed(root: &Path, config: &Value) -> Result<PathBuf, String> {
             .ok_or("missing registration tool program")?,
         None => NAME,
     };
-    chrono_harness::resolve_program(root, program, None)
+    crate::wire::resolve_program(root, program, None)
+}
+
+const ENTRY: &str = ".chrono-harness/config.json";
+
+/// Most hosts provide a standard installed runner. An explicitly installed custom path may
+/// itself be supplied by a native platform profile before that runner can read its full policy.
+fn declared_runtime(root: &Path) -> Result<PathBuf, String> {
+    fn document(root: &Path, name: &str) -> Result<Value, String> {
+        use std::path::Component;
+        let mut path = root.to_path_buf();
+        for component in Path::new(name).components() {
+            let Component::Normal(name) = component else {
+                return Err("invalid host configuration path".into());
+            };
+            path.push(name);
+            if path
+                .symlink_metadata()
+                .map_err(|e| e.to_string())?
+                .is_symlink()
+            {
+                return Err(format!("host configuration symlink: {}", path.display()));
+            }
+        }
+        serde_json::from_reader(std::fs::File::open(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
+    }
+    let config = document(root, ENTRY)?;
+    let config = match config["schema"].as_str() {
+        Some("chrono-git-configs/v1" | "chrono-git-configs/v2" | "chrono-git-configs/v3") => {
+            let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+            let host = &config["platforms"][platform];
+            let path = if let Some(path) = host.as_str() {
+                path
+            } else {
+                let program = host["program"]
+                    .as_str()
+                    .map(Path::new)
+                    .filter(|p| p.is_absolute())
+                    .ok_or("Git selector program required")?;
+                let hash = crate::wire::file_identity(program)?.0;
+                host["configurations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|row| row["sha256"] == hash)
+                    .and_then(|row| row["path"].as_str())
+                    .ok_or("Git config selector has no registered executable identity")?
+            };
+            document(root, path)?
+        }
+        _ => config,
+    };
+    let path = config["runner"]["path"]
+        .as_str()
+        .unwrap_or("chrono-harness");
+    crate::wire::resolve_program(root, path, None)
 }
 
 pub(super) fn host_config(root: &Path) -> Result<Value, String> {
-    let entry = ".chrono-harness/config.json";
-    if root.join(entry).try_exists().map_err(|e| e.to_string())? {
-        chrono_harness::load_selected_config(root, entry)
-    } else {
-        Ok(Value::Null)
+    if !root.join(ENTRY).try_exists().map_err(|e| e.to_string())? {
+        return Ok(Value::Null);
     }
+    let runner = [".chrono-harness/bin/chrono-harness", "chrono-harness"]
+        .into_iter()
+        .find_map(|name| crate::wire::resolve_program(root, name, None).ok())
+        .map(Ok)
+        .unwrap_or_else(|| declared_runtime(root))?;
+    crate::commands::query(root, &runner, "selected-host-config-v1", &json!(ENTRY))
 }
 
 pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
@@ -68,44 +126,22 @@ pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
 /// the caller selects the directory in which the registration query must interpret them.
 fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<Value, String> {
     let program = program.canonicalize().map_err(|err| err.to_string())?;
-    let digest = chrono_harness::file_identity(&program)?.0;
-    let mut command = Command::new(&program);
-    command
-        .current_dir(root)
-        .arg(operation)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped());
-    chrono_harness::process_fds::forward_command(&mut command, &[])?;
-    let mut process = command.spawn().map_err(|e| e.to_string())?;
-    let stdin = process.stdin.take().expect("piped stdin");
-    let (output, written) = std::thread::scope(|scope| {
-        let sender = scope.spawn(move || serde_json::to_writer(stdin, input));
-        (process.wait_with_output(), sender.join())
-    });
-    let out = output.map_err(|e| e.to_string())?;
-    if !out.status.success() {
-        let reason = String::from_utf8(out.stderr).map_err(|e| e.to_string())?;
-        return Err(if reason.is_empty() {
-            format!("registration {operation} {}", out.status)
-        } else {
-            reason.strip_suffix('\n').unwrap_or(&reason).into()
-        });
-    }
-    written
-        .map_err(|_| "registration input writer panicked")?
-        .map_err(|e| e.to_string())?;
-    if chrono_harness::file_identity(&program)?.0 != digest {
-        return Err("E_TOOL_BINDING: registration executable changed".into());
-    }
-    chrono_harness::decode(&out.stdout)
+    let runner = crate::host_runner(root)?;
+    crate::commands::query(
+        root,
+        &runner,
+        "installed-query-v1",
+        &json!({
+            "root":root,"environment":"inherited","program":program,"operation":operation,"input":input
+        }),
+    )
 }
 impl Registry {
     pub fn runner(&self, root: &Path) -> Result<PathBuf, String> {
         let name = self.config()["runner"]["path"]
             .as_str()
             .ok_or("missing registered runner path")?;
-        chrono_harness::resolve_program(root, name, None)
+        crate::wire::resolve_program(root, name, None)
     }
     pub fn config(&self) -> &Value {
         &self.view["candidate"][&self.config_path]

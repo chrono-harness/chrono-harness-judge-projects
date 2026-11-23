@@ -21,20 +21,20 @@ use crate::runtime_session::Session;
 #[cfg(not(verus_keep_ghost))]
 use crate::verified_state::{self, OperationObservation};
 #[cfg(not(verus_keep_ghost))]
+use crate::wire::sha256;
+#[cfg(not(verus_keep_ghost))]
 use crate::{OperationResult, Results};
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::{CommandSpec, ProcessResult, no_symlink_parents, sha256};
+use crate::{commands::Spec as CommandSpec, wire::ProcessResult};
 #[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
 #[cfg(not(verus_keep_ghost))]
-use std::{fs, path::PathBuf, time::SystemTime};
+use std::time::SystemTime;
 
 #[cfg(not(verus_keep_ghost))]
 struct Original {
-    root: PathBuf,
     path: String,
     session: std::cell::RefCell<Session>,
-    adopted: bool,
 }
 
 #[cfg(not(verus_keep_ghost))]
@@ -54,20 +54,14 @@ impl Original {
         runner: &std::path::Path,
     ) -> Result<Self, String> {
         let mut session = Session::open(&plan.root, runner, "retained-artifacts-v1")?;
-        #[derive(serde::Deserialize)]
-        struct Opened {
-            adopted: bool,
-        }
-        let opened: Opened = session.call(
+        session.call::<Value>(
             json!({"operation":"begin-directory","producer":"check-original",
             "path":path,"reference":format!("projects-recovery:{}", sha256(path.as_bytes())),
             "intent":{"kind":"project-execution","plan":plan.identity,"state":"unknown"}}),
         )?;
         let original = Self {
-            root: plan.root.clone(),
             path,
             session: std::cell::RefCell::new(session),
-            adopted: opened.adopted,
         };
         original.write("intent.json", &intent)?;
         Ok(original)
@@ -100,31 +94,46 @@ pub(crate) fn address(plan: &Execution) -> Result<&str, String> {
 }
 
 #[cfg(not(verus_keep_ghost))]
-fn observation(row: &OperationResult) -> OperationObservation<'_> {
-    OperationObservation {
+fn observation<'a>(
+    original: &Original,
+    row: &'a OperationResult,
+) -> Result<OperationObservation<'a>, String> {
+    let terminal = row
+        .receipt
+        .as_ref()
+        .map(|receipt| {
+            original.session.borrow_mut().call(json!({
+        "operation":"process-completion","exit_code":receipt.process.exit_code,
+        "signal":receipt.process.exit_signal,"owned_work_joined":receipt.process.owned_work_joined,
+    }))
+        })
+        .transpose()?;
+    Ok(OperationObservation {
         status: &row.status,
-        process_terminal: row.receipt.as_ref().map(|receipt| {
-            chrono_harness::verified_release::process_completion_known(
-                receipt.process.exit_code,
-                receipt.process.exit_signal,
-                receipt.process.owned_work_joined,
-            )
-        }),
-    }
+        process_terminal: terminal,
+    })
 }
 
 #[cfg(not(verus_keep_ghost))]
-fn encoded(row: &OperationResult, retained_process: Option<Value>) -> Result<Value, String> {
+fn encoded(
+    original: &Original,
+    row: &OperationResult,
+    retained_process: Option<Value>,
+) -> Result<Value, String> {
     let mut value = serde_json::to_value(row).map_err(|e| e.to_string())?;
     if row.receipt.is_some() {
         value["receipt"]["process"] = match retained_process {
             Some(process) => process,
-            None => chrono_harness::full::compact_process(&value["receipt"]["process"])?,
+            None => original.session.borrow_mut().call(
+                json!({"operation":"compact-process","process":value["receipt"]["process"]}),
+            )?,
         };
     }
     value["schema"] = json!("chrono-project-operation-result/v1");
     value["updated_at_unix_millis"] = json!(now()?);
-    value["state"] = json!(verified_state::operation_state(&observation(row)));
+    value["state"] = json!(verified_state::operation_state(&observation(
+        original, row
+    )?));
     Ok(value)
 }
 
@@ -164,9 +173,10 @@ impl Run {
         {
             let reference = match &row.original {
                 Some(original) => original.clone(),
-                None => self
-                    .original
-                    .write(&format!("undelivered-{index}.json"), &encoded(row, None)?)?,
+                None => self.original.write(
+                    &format!("undelivered-{index}.json"),
+                    &encoded(&self.original, row, None)?,
+                )?,
             };
             if row.original.is_some() {
                 inputs.push(
@@ -183,8 +193,8 @@ impl Run {
             .executed
             .iter()
             .chain(&results.blocked)
-            .map(observation)
-            .collect();
+            .map(|row| observation(&self.original, row))
+            .collect::<Result<Vec<_>, String>>()?;
         let terminal = verified_state::all_terminal(&observations);
         let reference = self.original.write(
             "result.json",
@@ -208,7 +218,6 @@ impl Run {
 #[cfg(not(verus_keep_ghost))]
 pub(crate) struct Operation {
     original: Original,
-    streams: [PathBuf; 3],
     compiler_output: Option<String>,
 }
 
@@ -223,7 +232,7 @@ impl Operation {
         let run = address(plan)?;
         let path = format!("{run}.operation-{index}");
         let streams =
-            ["stdout", "stderr", "launch.json"].map(|suffix| plan.root.join(&path).join(suffix));
+            ["stdout", "stderr", "launch.json"].map(|name| plan.root.join(&path).join(name));
         let op = &plan.operations[index];
         let mut compiler_output = None;
         if op.method.output_contract.is_some() {
@@ -234,13 +243,19 @@ impl Operation {
                 .filter(|output| std::path::Path::new(output).starts_with(run))
             {
                 let expected = format!("{run}/{}.rlib", op.method.operation);
-                chrono_harness::units::artifact_path(&expected)?;
+                let mut originals = Session::open(&plan.root, runner, "retained-artifacts-v1")?;
+                originals.call::<()>(json!({"operation":"check-artifact-path","path":expected}))?;
+                originals.close()?;
+
                 if !owned_compiler_output(
                     output == &expected,
                     !op.method.operation.contains('/'),
-                    chrono_harness::verified_verifier::canonical_verifier_arguments(
-                        &op.method.argv,
-                    ),
+                    crate::commands::query(
+                        &plan.root,
+                        runner,
+                        "compiler-output-v1",
+                        &json!({"operation":"canonical","argv":op.method.argv}),
+                    )?,
                 ) {
                     return Err(
                         "compiler output in the run directory must belong to this operation".into(),
@@ -263,7 +278,6 @@ impl Operation {
         )?;
         Ok(Self {
             original,
-            streams,
             compiler_output,
         })
     }
@@ -297,88 +311,43 @@ impl Operation {
         ) {
             return Ok(());
         }
-        let root = &self.original.root;
         let library_digest = std::str::from_utf8(&library.sha256).map_err(|e| e.to_string())?;
-        let dependency_path = format!("{output}.d");
-        let dependency_digest = sha256(dependency);
-        let mut entries = Vec::new();
-        for (relative, digest, length) in [
-            (output, library_digest, library.length),
-            (
-                dependency_path.as_str(),
-                dependency_digest.as_str(),
-                dependency.len() as u64,
-            ),
-        ] {
-            let path = no_symlink_parents(root, relative)?;
-            let identity = chrono_harness::artifact_disposal::identity(&path)?;
-            let actual = chrono_harness::file_identity(&path)?;
-            verified_state::validate_original(&actual.0, actual.1, Some((digest, length)))?;
-            entries.push((relative, identity));
-        }
-        if !self.original.adopted {
-            fs::File::open(root.join(&self.original.path).join("result.json"))
-                .and_then(|file| file.sync_all())
-                .map_err(|e| e.to_string())?;
-        }
-        let parent = std::path::Path::new(output)
-            .parent()
-            .and_then(|p| p.to_str())
-            .ok_or("compiler output parent")?;
-        chrono_harness::artifact_disposal::source_safe(root, parent)?;
-        for (relative, identity) in entries {
-            chrono_harness::artifact_disposal::dispose_entry(root, relative, &identity, || {
-                self.original
-                    .session
-                    .borrow_mut()
-                    .call(json!({"operation":"check-directory-write","path":self.original.path}))
-            })?;
-        }
-        fs::File::open(no_symlink_parents(root, parent)?)
-            .and_then(|directory| directory.sync_all())
-            .map_err(|e| e.to_string())
+        self.original.session.borrow_mut().call(json!({
+            "operation":"dispose-compiler-originals","path":self.original.path,
+            "library_sha256":library_digest,"library_length":library.length,
+            "dependency_sha256":sha256(dependency),"dependency_length":dependency.len()
+        }))
     }
 
     pub(crate) fn finish(self, row: &OperationResult) -> Result<Value, String> {
         let retained_process = if let Some(receipt) = &row.receipt {
-            let paths = self
-                .streams
-                .iter()
-                .map(|path| {
-                    path.strip_prefix(&self.original.root)
-                        .map_err(|e| e.to_string())?
-                        .to_str()
-                        .ok_or("operation original UTF-8".into())
-                })
-                .collect::<Result<Vec<_>, String>>()?;
-            let process = chrono_harness::scoped_report::retain_process_evidence(
-                &self.original.root,
-                &receipt.process,
-                paths[0],
-                paths[1],
-                paths[2],
-            )?;
-            for (index, (stream, expected_digest, expected_length)) in [
+            #[derive(serde::Deserialize)]
+            struct Evidence {
+                record: Value,
+                stdout_length: u64,
+                stderr_length: u64,
+            }
+            let original: Evidence = self.original.session.borrow_mut().call(json!({
+                "operation":"directory-evidence","path":self.original.path,"process":receipt.process
+            }))?;
+            let process = original.record;
+            for (stream, expected_digest, expected_length, length) in [
                 (
                     "stdout",
                     &receipt.process.stdout_sha256,
                     receipt.process.stdout_bytes.len() as u64,
+                    original.stdout_length,
                 ),
                 (
                     "stderr",
                     &receipt.process.stderr_sha256,
                     receipt.process.stderr_bytes.len() as u64,
+                    original.stderr_length,
                 ),
-            ]
-            .into_iter()
-            .enumerate()
-            {
+            ] {
                 let digest = process[format!("{stream}_original")]["sha256"]
                     .as_str()
                     .ok_or("operation stream original digest")?;
-                let length = fs::symlink_metadata(&self.streams[index])
-                    .map_err(|e| e.to_string())?
-                    .len();
                 verified_state::validate_original(
                     digest,
                     length,
@@ -389,13 +358,14 @@ impl Operation {
         } else {
             None
         };
-        let reference = self
-            .original
-            .write("result.json", &encoded(row, retained_process)?)?;
+        let reference = self.original.write(
+            "result.json",
+            &encoded(&self.original, row, retained_process)?,
+        )?;
         self.retire_compiler_files(row)?;
         // The operation directory owns both its result and the exact streams it
         // references. Unknown results keep that directory's recovery protection.
-        let known = verified_state::terminal(&observation(row));
+        let known = verified_state::terminal(&observation(&self.original, row)?);
         self.original.finish(
             known,
             json!({"kind":"project-operation", "operation":row.operation, "terminal":known}),

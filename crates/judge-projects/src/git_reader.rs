@@ -1,6 +1,6 @@
 //! Observe both endpoints and both working-tree checks through the same installed Git reader.
 use crate::runtime_session::Session;
-use chrono_harness::wire::Request;
+use crate::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;
@@ -19,8 +19,8 @@ pub(crate) struct Reader {
 impl Reader {
     pub fn open(request: &Request) -> Result<Self, String> {
         let root = &request.candidate.root;
-        let program = chrono_harness::resolve_program(root, &request.runner.path, None)?;
-        if chrono_harness::file_identity(&program)?.0 != request.runner.sha256 {
+        let program = crate::wire::resolve_program(root, &request.runner.path, None)?;
+        if crate::wire::file_identity(&program)?.0 != request.runner.sha256 {
             return Err("E_TOOL_BINDING: runner executable changed".into());
         }
         let mut session = Session::open(root, &program, "git-facts-v1")?;

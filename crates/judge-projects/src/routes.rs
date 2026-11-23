@@ -1,7 +1,7 @@
 //! The executor consumes a checked plan and retains the original business-process receipt.
 use crate::commands::{self, Spec};
 use crate::registration::Registry;
-use chrono_harness::{file_identity, observation::Tool, resolve_program};
+use crate::wire::{Tool, file_identity, resolve_program};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -17,7 +17,7 @@ pub struct Method {
     pub tool: String,
     pub argv: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub output_contract: Option<chrono_harness::verified_verifier::OutputContract>,
+    pub output_contract: Option<crate::compiler::OutputContract>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -62,7 +62,7 @@ impl Claims {
                 other
                     .outputs
                     .iter()
-                    .any(|other| chrono_harness::units::overlap(path, other))
+                    .any(|other| crate::wire::paths_overlap(path, other))
             })
     }
 }
@@ -298,11 +298,7 @@ impl<'a> Routes<'a> {
             _ => Err("E_RECEIPT_MISMATCH: invalid receipt comparison".into()),
         }
     }
-    pub fn binding(
-        &self,
-        req: &chrono_harness::wire::Request,
-        effective: &Value,
-    ) -> Result<Value, String> {
+    pub fn binding(&self, req: &crate::wire::Request, effective: &Value) -> Result<Value, String> {
         let reply = self.query(
             "plan-context-v1",
             &json!({"request":req,"effective_inputs":effective,"templates":{}}),

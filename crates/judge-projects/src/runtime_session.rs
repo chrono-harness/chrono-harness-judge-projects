@@ -17,11 +17,12 @@ impl Session {
     pub fn open(root: &Path, program: &Path, name: &'static str) -> Result<Self, String> {
         let mut command = Command::new(program);
         command
+            .arg("exec-with-descriptors-v1")
+            .arg(program)
             .arg(name)
             .current_dir(root)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped());
-        chrono_harness::process_fds::forward_command(&mut command, &[])?;
         let mut child = command
             .spawn()
             .map_err(|e| format!("{} {name}: {e}", program.display()))?;
@@ -51,6 +52,11 @@ impl Session {
         serde_json::from_slice::<Result<T, String>>(&line)
             .map_err(|e| format!("E_PROTOCOL: {e}"))?
     }
+    pub fn decode<T: DeserializeOwned>(&mut self, bytes: &[u8]) -> Result<T, String> {
+        let text = std::str::from_utf8(bytes).map_err(|e| e.to_string())?;
+        self.call(serde_json::json!({"operation":"decode-json","text":text}))
+    }
+
     pub fn close(mut self) -> Result<(), String> {
         drop(self.input.take());
         let status = self.child.wait().map_err(|e| e.to_string())?;

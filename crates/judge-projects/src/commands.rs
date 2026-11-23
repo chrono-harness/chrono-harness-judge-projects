@@ -8,10 +8,13 @@ use std::{
     process::{Command, Stdio},
 };
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Spec {
     pub program: String,
+    #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub timeout_seconds: u64,
     pub output_limit_bytes: usize,
@@ -32,12 +35,13 @@ pub(crate) fn invoke(
     }
     let mut command = Command::new(runner);
     command
+        .arg("exec-with-descriptors-v1")
+        .arg(runner)
         .arg("run-command-v1")
         .current_dir(root)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    chrono_harness::process_fds::forward_command(&mut command, &[])?;
     let mut child = command.spawn().map_err(|e| e.to_string())?;
     let mut stdin = child.stdin.take().expect("piped stdin");
     let (reply, written) = std::thread::scope(|scope| {
@@ -74,4 +78,44 @@ pub(crate) fn invoke(
     }
     let (stdout, stderr) = bytes.split_at(lengths.stdout_length);
     Ok((lengths.exit_code, stdout.to_vec(), stderr.to_vec()))
+}
+
+/// Call one installed runner query while retaining the original caller's descriptors and cwd.
+pub(crate) fn query<T: serde::de::DeserializeOwned>(
+    root: &Path,
+    runner: &Path,
+    operation: &str,
+    request: &serde_json::Value,
+) -> Result<T, String> {
+    let mut child = Command::new(runner)
+        .arg("exec-with-descriptors-v1")
+        .arg(runner)
+        .arg(operation)
+        .current_dir(root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let stdin = child.stdin.take().expect("piped stdin");
+    let (output, written) = std::thread::scope(|scope| {
+        let writer = scope.spawn(|| serde_json::to_writer(stdin, request));
+        (child.wait_with_output(), writer.join())
+    });
+    let output = output.map_err(|e| e.to_string())?;
+    if !output.status.success() {
+        let message = String::from_utf8(output.stderr).map_err(|e| e.to_string())?;
+        return Err(if message.is_empty() {
+            format!("{operation} {}", output.status)
+        } else {
+            message.strip_suffix('\n').unwrap_or(&message).into()
+        });
+    }
+    written
+        .map_err(|_| "installed runner input writer panicked")?
+        .map_err(|e| e.to_string())?;
+    let mut evidence = crate::runtime_session::Session::open(root, runner, "judge-evidence-v1")?;
+    let reply = evidence.decode(&output.stdout)?;
+    evidence.close()?;
+    Ok(reply)
 }

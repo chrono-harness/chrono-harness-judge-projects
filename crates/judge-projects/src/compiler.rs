@@ -1,28 +1,45 @@
-//! Filesystem observations of the compiler outputs declared by the executed method.
-use std::{fs, io::Read, path::Path};
+//! Public compiler evidence emitted by the installed runner while the operation owns its files.
+use serde::{Deserialize, Serialize};
+use std::path::Path;
 
-pub(crate) struct DependencyIo<'a>(pub(crate) &'a Path);
-impl chrono_harness::verified_verifier::sources::DependencyRead for DependencyIo<'_> {
-    fn read(&self, path: &[u8], limit: u64) -> Result<Vec<u8>, String> {
-        std::str::from_utf8(path)
-            .map_err(|e| e.to_string())
-            .and_then(|path| fs::File::open(self.0.join(path)).map_err(|e| e.to_string()))
-            .and_then(|file| {
-                let mut bytes = Vec::new();
-                file.take(limit)
-                    .read_to_end(&mut bytes)
-                    .map(|_| bytes)
-                    .map_err(|e| e.to_string())
-            })
-    }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct OutputContract {
+    pub version: String,
+    pub commit: String,
 }
 
-impl chrono_harness::verified_verifier::ArtifactRead for DependencyIo<'_> {
-    fn identity(&self, path: &[u8]) -> Result<(Vec<u8>, u64), String> {
-        std::str::from_utf8(path)
-            .map_err(|e| e.to_string())
-            .and_then(|path| chrono_harness::no_symlink_parents(self.0, path))
-            .and_then(|path| chrono_harness::file_identity(&path))
-            .map(|(digest, length)| (digest.into_bytes(), length))
-    }
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Artifact {
+    pub path: Vec<u8>,
+    pub sha256: Vec<u8>,
+    pub length: u64,
+}
+
+#[derive(Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Observed {
+    pub dependency: Option<Result<Vec<u8>, String>>,
+    pub artifact: Option<Result<Artifact, String>>,
+}
+
+pub fn observe(
+    root: &Path,
+    runner: &Path,
+    op: &crate::routes::Operation,
+    process: &crate::wire::ProcessResult,
+) -> Result<Observed, String> {
+    let Some(contract) = &op.method.output_contract else {
+        return Ok(Observed::default());
+    };
+    crate::commands::query(
+        root,
+        runner,
+        "compiler-output-v1",
+        &serde_json::json!({
+            "operation":"observe","contract":contract,"argv":op.method.argv,"exit":process.exit_code,
+            "process_failed":process.failure.is_some(),"limit":op.output_limit_bytes
+        }),
+    )
 }
