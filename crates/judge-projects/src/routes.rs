@@ -167,12 +167,9 @@ impl<'a> Routes<'a> {
             resolve_program(root, program, environment.get("PATH").map(String::as_str))?
         };
         let protocol = &registry.config()["protocol"];
-        let runner = registry.config()["runner"]["path"]
-            .as_str()
-            .ok_or("missing registered runner path")?;
         Self::bound(
             root,
-            resolve_program(root, runner, None)?,
+            registry.runner(root)?,
             &path,
             expected,
             environment,

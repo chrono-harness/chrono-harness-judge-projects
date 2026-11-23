@@ -101,6 +101,12 @@ fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<
     chrono_harness::decode(&out.stdout)
 }
 impl Registry {
+    pub fn runner(&self, root: &Path) -> Result<PathBuf, String> {
+        let name = self.config()["runner"]["path"]
+            .as_str()
+            .ok_or("missing registered runner path")?;
+        chrono_harness::resolve_program(root, name, None)
+    }
     pub fn config(&self) -> &Value {
         &self.view["candidate"][&self.config_path]
     }
