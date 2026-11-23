@@ -1,4 +1,5 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
+pub mod evidence_query;
 mod impact;
 mod state;
 mod verified_languages;

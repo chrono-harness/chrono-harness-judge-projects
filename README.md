@@ -11,3 +11,8 @@
 `chrono-judge-projects check-pairs-v1` 从标准输入读取 JSON 对象。字段 `registry` 是固定提交的项目登记，`owners` 是本次变更影响的节点 ID 数组。命令先校验登记格式，再核对选中的项目和脚本的专属测试配对及语言。通过时退出 0，拒绝时向 stderr 写入原因并退出 2。该命令只读取传入的数据。
 
 本仓从已合入 dev 的预发布标签构建 Linux x86_64 和 macOS arm64 的命令，正式标签指向 main。每个发行附两个二进制和 SHA256SUMS。各平台在上传前运行项目配对查询并验证错误输入的退出码。
+
+工作流判官使用以下两个项目证据查询。两者从标准输入读取一个 JSON 对象，错误原因写入 stderr 并退出 2。
+
+- `read-results-v1` 读取项目执行结果，输出 `results` 和 `passed`。前者使用项目判官原生序列化后的字段和默认值，供检查工作流凭证摘要时使用。
+- `check-collection-v1` 在当前候选检出根运行。输入含 `request`、`effective_inputs`、`plan` 和 `results`。验证历史收集时，另传 `retained` 对象，其中的 `request` 和 `artifacts` 来自生产者报告。核验成功后退出 0，标准输出为空。
