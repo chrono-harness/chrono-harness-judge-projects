@@ -2,6 +2,7 @@
 mod compiler;
 pub mod evidence_query;
 pub mod execute_query;
+mod git_reader;
 mod impact;
 pub use impact::decode as decode_impact;
 mod pair_checks;
@@ -384,24 +385,22 @@ fn pairs(root: &Path, r: &Registry, affected: &BTreeSet<String>) -> Result<(), S
         &tests_for_owner,
     )
 }
-pub fn snapshot_with_reader(
-    root: &Path,
+fn snapshot_with_reader(
     candidate: &str,
     artifacts: &[String],
-    reader: &facts::Reader,
+    reader: &mut git_reader::Reader,
 ) -> Result<(), String> {
-    let artifacts: Vec<_> = artifacts.iter().map(String::as_str).collect();
-    let state = reader.checkout_excluding(root, candidate, &artifacts)?;
+    let state = reader.checkout(artifacts)?;
     if state.head != candidate
         || !state.tracked.is_empty()
         || state
             .untracked
             .iter()
-            .any(|p| !artifacts.iter().any(|a| p.starts_with(a)))
-        || state
-            .index_flags
-            .iter()
-            .any(|f| f.tag.as_bytes()[0].is_ascii_lowercase() || f.tag.eq_ignore_ascii_case("S"))
+            .any(|p| !artifacts.iter().any(|a| p.starts_with(a.as_str())))
+        || state.index_flags.iter().any(|f| {
+            f.tag.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+                || f.tag.eq_ignore_ascii_case("S")
+        })
     {
         return Err("E_SNAPSHOT_DIRTY: operation changed candidate inputs".into());
     }
@@ -1571,18 +1570,19 @@ fn validate_retained_response(req: &Request, response: &Response, exit: i32) -> 
 pub fn judge(req: &Request) -> Response {
     let mut response = req.response(Status::Pass);
     let mut observations = registration::Observations::default();
-    let reader = facts::Reader::for_request(req);
-    let result = reader
-        .as_ref()
-        .map_err(Clone::clone)
-        .and_then(|reader| evaluate(req, &mut response, reader, &mut observations));
-    if let Ok(reader) = &reader {
-        if reader.is_bound() {
-            response
-                .outputs
-                .insert("git_facts".into(), observations.finish(reader));
+    let result = git_reader::Reader::open(req).and_then(|mut reader| {
+        let evaluation = evaluate(req, &mut response, &mut reader, &mut observations);
+        let facts = if reader.bound {
+            observations.finish(&mut reader).map(Some)
+        } else {
+            Ok(None)
+        };
+        let closed = reader.close();
+        if let Some(facts) = facts? {
+            response.outputs.insert("git_facts".into(), facts);
         }
-    }
+        evaluation.and(closed)
+    });
     match result {
         Ok(()) => {}
         Err(message) => {
@@ -1605,7 +1605,7 @@ pub fn judge(req: &Request) -> Response {
 fn evaluate(
     req: &Request,
     response: &mut Response,
-    reader: &facts::Reader,
+    reader: &mut git_reader::Reader,
     observations: &mut registration::Observations,
 ) -> Result<(), String> {
     req.validate()?;
@@ -1704,12 +1704,7 @@ fn evaluate(
         );
         return Ok(());
     };
-    snapshot_with_reader(
-        &req.candidate.root,
-        &req.candidate.commit,
-        &artifacts,
-        reader,
-    )?;
+    snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
     let mut results = execute(&plan, &routes, &dispatch)?;
     if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
@@ -1767,12 +1762,7 @@ fn evaluate(
     response
         .outputs
         .insert("tests".into(), serde_json::to_value(&results).unwrap());
-    snapshot_with_reader(
-        &req.candidate.root,
-        &req.candidate.commit,
-        &artifacts,
-        reader,
-    )?;
+    snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
     r.evidence(&req.candidate.root, req, json!({"mode":"live"}))
         .map_err(|e| format!("E_EVIDENCE_UNRESOLVED: post-execution {e}"))?;
     if !results.passed() {

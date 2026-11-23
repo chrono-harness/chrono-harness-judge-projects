@@ -1,7 +1,7 @@
 //! Read the public project execution results or verify a retained collection.
 use crate::routes::Execution;
 use crate::{Results, validate_retained_request_at, verify_completion};
-use chrono_harness::{facts, wire::Request};
+use chrono_harness::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{io::Read, path::Path};
@@ -35,9 +35,10 @@ pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
     if current.candidate.root != root {
         return Err("collection declaration root differs from current checkout".into());
     }
-    let reader = facts::Reader::for_request(current)?;
+    let mut reader = crate::git_reader::Reader::open(current)?;
     let registrations =
-        crate::registration::views(current, &reader, &mut Default::default(), false)?;
+        crate::registration::views(current, &mut reader, &mut Default::default(), false)?;
+    reader.close()?;
     let (request, artifacts) = if let Some(retained) = &query.retained {
         let original = &retained.request;
         let observed = validate_retained_request_at(
