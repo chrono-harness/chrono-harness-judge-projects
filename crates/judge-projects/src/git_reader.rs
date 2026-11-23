@@ -1,6 +1,6 @@
 //! Observe both endpoints and both working-tree checks through the same installed Git reader.
 use crate::runtime_session::Session;
-use chrono_harness::wire::Request;
+use crate::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::collections::BTreeMap;

@@ -14,10 +14,9 @@ mod runtime_session;
 mod state;
 mod verified_languages;
 mod verified_state;
-use chrono_harness::{
-    CommandSpec, facts,
-    wire::{self, Finding, Request, Response, Status},
-};
+pub mod wire;
+use chrono_harness::{CommandSpec, facts};
+use wire::{Finding, Request, Response, Status};
 mod registration;
 pub use receipt::Receipt;
 use registration::Registry;
@@ -461,7 +460,7 @@ fn collect_reports(
         .ok_or("E_COLLECTION_INPUT: invalid report limit")?;
     let bytes = report_bytes(&mut originals, &manifest_path, None, manifest_limit)
         .map_err(|e| format!("E_COLLECTION_INPUT: manifest: {e}"))?;
-    let manifest_sha256 = chrono_harness::sha256(&bytes);
+    let manifest_sha256 = wire::sha256(&bytes);
     let manifest: chrono_harness::units::FullManifest = chrono_harness::decode(&bytes)?;
     if !matches!(
         manifest.schema.as_str(),
@@ -502,7 +501,7 @@ fn collect_reports(
         }
         let report_bytes = report_bytes(&mut originals, &input.path, None, report_limit)
             .map_err(|e| format!("E_COLLECTION_INPUT: {}: {e}", input.unit))?;
-        if chrono_harness::sha256(&report_bytes) != input.sha256 {
+        if wire::sha256(&report_bytes) != input.sha256 {
             return Err(format!(
                 "E_COLLECTION_INPUT: report digest mismatch: {}",
                 input.unit
@@ -745,7 +744,7 @@ fn validate_unit_report(
 ) -> Result<Results, String> {
     let top_request: Request = serde_json::from_value(report["request"].clone())
         .map_err(|e| format!("E_COLLECTION_INPUT: retained request: {e}"))?;
-    top_request.validate()?;
+    reader.call::<()>(json!({"operation":"validate-request","request":&top_request}))?;
     if top_request.scope
         != Some(chrono_harness::units::Scope::Unit {
             unit: unit.to_owned(),
@@ -1148,7 +1147,7 @@ fn validate_retained_request_at(
     root: &Path,
     transport: Option<&chrono_harness::prepared::ArtifactTransport>,
 ) -> Result<Value, String> {
-    req.validate()?;
+    req.validate_at(root, &r.runner(root)?)?;
     let ctx = chrono_harness::json(&artifact_text(
         originals,
         req.context.path.to_str().ok_or("context address")?,
@@ -1292,8 +1291,7 @@ fn validate_declared_tools(
                 current_root,
                 relative.to_str().ok_or("registered tool path")?,
             )?;
-            if chrono_harness::sha256(&fs::read(current).map_err(|e| e.to_string())?) != tool.sha256
-            {
+            if wire::sha256(&fs::read(current).map_err(|e| e.to_string())?) != tool.sha256 {
                 return Err("E_COLLECTION_INPUT: candidate tool bytes differ".into());
             }
         }
@@ -1369,7 +1367,7 @@ fn verify_completion(
         .ok_or("manifest bound")?;
     let manifest_bytes = report_bytes(originals, &completion.source, artifacts, manifest_bound)?;
     if manifest_bytes.len() as u64 > manifest_bound
-        || chrono_harness::sha256(&manifest_bytes) != completion.source_sha256
+        || wire::sha256(&manifest_bytes) != completion.source_sha256
     {
         return Err("E_COLLECTION_INPUT: completed manifest bytes/bound differ".into());
     }
@@ -1431,7 +1429,7 @@ fn verify_completion(
         }
         let bytes = report_bytes(originals, address, artifacts, limit)?;
         if bytes.len() as u64 > limit
-            || source["sha256"] != chrono_harness::sha256(&bytes)
+            || source["sha256"] != wire::sha256(&bytes)
             || address
                 != format!(
                     ".chrono-harness/state/import-{}.json",
@@ -1647,7 +1645,10 @@ fn evaluate(
     reader: &mut git_reader::Reader,
     observations: &mut registration::Observations,
 ) -> Result<(), String> {
-    req.validate()?;
+    req.validate_at(
+        &req.candidate.root,
+        &chrono_harness::resolve_program(&req.candidate.root, &req.runner.path, None)?,
+    )?;
     let r = registration::views(req, reader, observations, true)?;
     let inputs = r
         .effective_inputs

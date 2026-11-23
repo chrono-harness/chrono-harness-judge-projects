@@ -1,7 +1,7 @@
 //! Read the public project execution results or verify a retained collection.
 use crate::routes::Execution;
+use crate::wire::Request;
 use crate::{Results, validate_retained_request_at, verify_completion};
-use chrono_harness::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{io::Read, path::Path};
@@ -31,7 +31,7 @@ struct Collection {
 pub fn check_collection(root: &Path, input: impl Read) -> Result<(), String> {
     let query: Collection = serde_json::from_reader(input).map_err(|error| error.to_string())?;
     let current = &query.request;
-    current.validate()?;
+    current.validate_at(root, &crate::host_runner(root)?)?;
     if current.candidate.root != root {
         return Err("collection declaration root differs from current checkout".into());
     }

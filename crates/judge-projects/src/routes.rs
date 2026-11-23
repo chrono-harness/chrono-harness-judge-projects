@@ -298,11 +298,7 @@ impl<'a> Routes<'a> {
             _ => Err("E_RECEIPT_MISMATCH: invalid receipt comparison".into()),
         }
     }
-    pub fn binding(
-        &self,
-        req: &chrono_harness::wire::Request,
-        effective: &Value,
-    ) -> Result<Value, String> {
+    pub fn binding(&self, req: &crate::wire::Request, effective: &Value) -> Result<Value, String> {
         let reply = self.query(
             "plan-context-v1",
             &json!({"request":req,"effective_inputs":effective,"templates":{}}),

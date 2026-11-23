@@ -1,7 +1,7 @@
 //! Read registration projections for the executor and replay original declarations.
 use crate::git_reader::Reader;
 use crate::routes::Scheduling;
-use chrono_harness::wire::Request;
+use crate::wire::Request;
 use serde::Deserialize;
 use serde_json::{Value, json};
 use std::{

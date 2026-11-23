@@ -1,7 +1,8 @@
 //! Capture compiler originals in the process owner before the operation releases its files.
 use crate::compiler;
 use crate::routes::{Execution, Operation};
-use chrono_harness::{ProcessResult, wire};
+use crate::wire;
+use chrono_harness::ProcessResult;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
