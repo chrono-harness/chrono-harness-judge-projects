@@ -8,10 +8,13 @@ use std::{
     process::{Command, Stdio},
 };
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Spec {
     pub program: String,
+    #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
     pub env: BTreeMap<String, String>,
     pub timeout_seconds: u64,
     pub output_limit_bytes: usize,
@@ -111,5 +114,8 @@ pub(crate) fn query<T: serde::de::DeserializeOwned>(
     written
         .map_err(|_| "installed runner input writer panicked")?
         .map_err(|e| e.to_string())?;
-    chrono_harness::decode(&output.stdout)
+    let mut evidence = crate::runtime_session::Session::open(root, runner, "judge-evidence-v1")?;
+    let reply = evidence.decode(&output.stdout)?;
+    evidence.close()?;
+    Ok(reply)
 }

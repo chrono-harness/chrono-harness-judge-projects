@@ -2,7 +2,7 @@
 use crate::compiler;
 use crate::routes::{Execution, Operation};
 use crate::wire;
-use chrono_harness::ProcessResult;
+use crate::wire::ProcessResult;
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

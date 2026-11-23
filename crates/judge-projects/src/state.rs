@@ -24,7 +24,7 @@ use crate::wire::sha256;
 #[cfg(not(verus_keep_ghost))]
 use crate::{OperationResult, Results};
 #[cfg(not(verus_keep_ghost))]
-use chrono_harness::{CommandSpec, ProcessResult};
+use crate::{commands::Spec as CommandSpec, wire::ProcessResult};
 #[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
 #[cfg(not(verus_keep_ghost))]
@@ -242,6 +242,9 @@ impl Operation {
                 .filter(|output| std::path::Path::new(output).starts_with(run))
             {
                 let expected = format!("{run}/{}.rlib", op.method.operation);
+                let mut originals = Session::open(&plan.root, runner, "retained-artifacts-v1")?;
+                originals.call::<()>(json!({"operation":"check-artifact-path","path":expected}))?;
+                originals.close()?;
 
                 if !owned_compiler_output(
                     output == &expected,

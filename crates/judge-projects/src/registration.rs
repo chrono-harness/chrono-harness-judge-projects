@@ -42,16 +42,75 @@ fn installed(root: &Path, config: &Value) -> Result<PathBuf, String> {
             .ok_or("missing registration tool program")?,
         None => NAME,
     };
-    chrono_harness::resolve_program(root, program, None)
+    crate::wire::resolve_program(root, program, None)
+}
+
+const ENTRY: &str = ".chrono-harness/config.json";
+
+/// Most hosts provide a standard installed runner. An explicitly installed custom path may
+/// itself be supplied by a native platform profile before that runner can read its full policy.
+fn declared_runtime(root: &Path) -> Result<PathBuf, String> {
+    fn document(root: &Path, name: &str) -> Result<Value, String> {
+        use std::path::Component;
+        let mut path = root.to_path_buf();
+        for component in Path::new(name).components() {
+            let Component::Normal(name) = component else {
+                return Err("invalid host configuration path".into());
+            };
+            path.push(name);
+            if path
+                .symlink_metadata()
+                .map_err(|e| e.to_string())?
+                .is_symlink()
+            {
+                return Err(format!("host configuration symlink: {}", path.display()));
+            }
+        }
+        serde_json::from_reader(std::fs::File::open(path).map_err(|e| e.to_string())?)
+            .map_err(|e| e.to_string())
+    }
+    let config = document(root, ENTRY)?;
+    let config = match config["schema"].as_str() {
+        Some("chrono-git-configs/v1" | "chrono-git-configs/v2" | "chrono-git-configs/v3") => {
+            let platform = format!("{}-{}", std::env::consts::OS, std::env::consts::ARCH);
+            let host = &config["platforms"][platform];
+            let path = if let Some(path) = host.as_str() {
+                path
+            } else {
+                let program = host["program"]
+                    .as_str()
+                    .map(Path::new)
+                    .filter(|p| p.is_absolute())
+                    .ok_or("Git selector program required")?;
+                let hash = crate::wire::file_identity(program)?.0;
+                host["configurations"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|row| row["sha256"] == hash)
+                    .and_then(|row| row["path"].as_str())
+                    .ok_or("Git config selector has no registered executable identity")?
+            };
+            document(root, path)?
+        }
+        _ => config,
+    };
+    let path = config["runner"]["path"]
+        .as_str()
+        .unwrap_or("chrono-harness");
+    crate::wire::resolve_program(root, path, None)
 }
 
 pub(super) fn host_config(root: &Path) -> Result<Value, String> {
-    let entry = ".chrono-harness/config.json";
-    if root.join(entry).try_exists().map_err(|e| e.to_string())? {
-        chrono_harness::load_selected_config(root, entry)
-    } else {
-        Ok(Value::Null)
+    if !root.join(ENTRY).try_exists().map_err(|e| e.to_string())? {
+        return Ok(Value::Null);
     }
+    let runner = [".chrono-harness/bin/chrono-harness", "chrono-harness"]
+        .into_iter()
+        .find_map(|name| crate::wire::resolve_program(root, name, None).ok())
+        .map(Ok)
+        .unwrap_or_else(|| declared_runtime(root))?;
+    crate::commands::query(root, &runner, "selected-host-config-v1", &json!(ENTRY))
 }
 
 pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
@@ -82,7 +141,7 @@ impl Registry {
         let name = self.config()["runner"]["path"]
             .as_str()
             .ok_or("missing registered runner path")?;
-        chrono_harness::resolve_program(root, name, None)
+        crate::wire::resolve_program(root, name, None)
     }
     pub fn config(&self) -> &Value {
         &self.view["candidate"][&self.config_path]

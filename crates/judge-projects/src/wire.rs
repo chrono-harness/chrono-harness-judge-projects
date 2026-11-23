@@ -119,11 +119,47 @@ pub struct Delta {
     pub old_mode: Option<String>,
     pub new_mode: Option<String>,
 }
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum Scope {
+    Unit { unit: String },
+    Collect { manifest: String },
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Unit {
+    pub tests: Vec<String>,
+    pub report_path: String,
+}
+#[derive(Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ArtifactTransport {
+    pub source_directory: String,
+    pub directory: String,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FullManifest {
+    pub schema: String,
+    pub reports: Vec<ReportInput>,
+}
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReportInput {
+    pub unit: String,
+    pub path: String,
+    pub sha256: String,
+    pub runner_sha256: Option<String>,
+    pub judge_sha256: Option<String>,
+    pub artifacts: Option<ArtifactTransport>,
+}
+
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub scope: Option<chrono_harness::units::Scope>,
+    pub scope: Option<Scope>,
     #[serde(default)]
     pub observations: Value,
     pub protocol: String,
@@ -158,4 +194,141 @@ impl Request {
             outputs: BTreeMap::new(),
         }
     }
+}
+
+/// Resolve the invocation name before the native process service is available.
+pub(crate) fn resolve_program(
+    root: &Path,
+    program: &str,
+    search: Option<&str>,
+) -> Result<PathBuf, String> {
+    let root = std::path::absolute(root).map_err(|error| error.to_string())?;
+    let path = Path::new(program);
+    let candidate = if path.is_absolute() || program.contains('/') {
+        Some(root.join(path)).filter(|p| p.is_file())
+    } else {
+        let search = search
+            .map(std::ffi::OsString::from)
+            .or_else(|| std::env::var_os("PATH"))
+            .ok_or("PATH is missing")?;
+        std::env::split_paths(&search)
+            .map(|dir| root.join(dir).join(program))
+            .find(|p| p.is_file())
+    };
+    candidate.ok_or_else(|| format!("executable not found: {program}"))
+}
+
+pub(crate) fn file_identity(path: &Path) -> Result<(String, u64), String> {
+    let error = |err| format!("{}: {err}", path.display());
+    let invalid = || format!("not a regular input file: {}", path.display());
+    if !path.metadata().map_err(error)?.is_file() {
+        return Err(invalid());
+    }
+    let mut file = std::fs::File::open(path).map_err(error)?;
+    if !file.metadata().map_err(error)?.is_file() {
+        return Err(invalid());
+    }
+    let mut digest = Sha256::new();
+    let length = std::io::copy(&mut file, &mut digest).map_err(error)?;
+    Ok((format!("{:x}", digest.finalize()), length))
+}
+
+pub(crate) fn paths_overlap(a: &str, b: &str) -> bool {
+    let (a, b) = (Path::new(a), Path::new(b));
+    a.starts_with(b) || b.starts_with(a)
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Tool {
+    pub program: String,
+    pub path: PathBuf,
+    pub basename: String,
+    pub sha256: String,
+    pub version: ProcessResult,
+}
+
+/// Wire receipt consumed by read-results-v1, including structured failures of an original process.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProcessResult {
+    pub argv: Vec<String>,
+    pub cwd: PathBuf,
+    pub environment: std::collections::BTreeMap<String, String>,
+    pub environment_digest: String,
+    /// Actual process-engine capability carrier, separate from declared inputs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ownership_fds: Option<String>,
+    pub stdin_sha256: String,
+    pub stdout_bytes: Vec<u8>,
+    pub stderr_bytes: Vec<u8>,
+    #[serde(default)]
+    pub stdout_complete: bool,
+    #[serde(default)]
+    pub stderr_complete: bool,
+    pub stdout_sha256: String,
+    pub stderr_sha256: String,
+    pub failure: Option<String>,
+    /// Structured failure evidence is additive to the historical string.  It
+    /// is deliberately outside the judge-v1 request/response wire contract.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_record: Option<ErrorRecord>,
+    pub exit_code: i32,
+    /// Actual process-owner drain and direct join, independent of command success.
+    #[serde(default)]
+    pub owned_work_joined: bool,
+    /// Actual terminal signal, including cancellation; exit_code keeps its wire meaning.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exit_signal: Option<i32>,
+    pub stdout: String,
+    pub stderr: String,
+    pub executable: PathBuf,
+    pub sha256: String,
+    /// Retained process records bind the launch identity to this receipt.
+    /// These fields are optional only for historical inline records.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launcher_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub child_pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeout_seconds: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_limit_bytes: Option<usize>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub launch_original: Option<Value>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ErrorRecord {
+    schema: ErrorSchema,
+    error: ErrorNode,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+enum ErrorSchema {
+    #[serde(rename = "chrono-error/v1")]
+    V1,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ErrorNode {
+    #[serde(rename = "type")]
+    kind: String,
+    code: String,
+    message: String,
+    context: BTreeMap<String, Value>,
+    source: Option<Box<ErrorNode>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    native_code: Option<i64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    traceback: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    related: Vec<RelatedError>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RelatedError {
+    role: String,
+    error: ErrorNode,
 }

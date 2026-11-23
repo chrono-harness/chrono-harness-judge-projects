@@ -1,7 +1,7 @@
 //! The executor consumes a checked plan and retains the original business-process receipt.
 use crate::commands::{self, Spec};
 use crate::registration::Registry;
-use chrono_harness::{file_identity, observation::Tool, resolve_program};
+use crate::wire::{Tool, file_identity, resolve_program};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use std::{
@@ -62,7 +62,7 @@ impl Claims {
                 other
                     .outputs
                     .iter()
-                    .any(|other| chrono_harness::units::overlap(path, other))
+                    .any(|other| crate::wire::paths_overlap(path, other))
             })
     }
 }

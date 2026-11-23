@@ -19,7 +19,6 @@ tracing-subscriber = { version = "0.3", default-features = false, features = ["r
 tracing-tunnel = { version = "0.1.0", default-features = false, features = ["std"] }
 vstd = "=0.0.0-2026-04-20-1748"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
-chrono-harness = { git = "https://github.com/chrono-harness/chrono-harness-runner.git", rev = "a1cff08f74d996d618372f20adc203d1b5904d50" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 serde_jcs = "=0.2.0"

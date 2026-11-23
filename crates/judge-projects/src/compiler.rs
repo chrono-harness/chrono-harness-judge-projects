@@ -28,7 +28,7 @@ pub fn observe(
     root: &Path,
     runner: &Path,
     op: &crate::routes::Operation,
-    process: &chrono_harness::ProcessResult,
+    process: &crate::wire::ProcessResult,
 ) -> Result<Observed, String> {
     let Some(contract) = &op.method.output_contract else {
         return Ok(Observed::default());

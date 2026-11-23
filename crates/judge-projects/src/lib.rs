@@ -15,7 +15,7 @@ mod state;
 mod verified_languages;
 mod verified_state;
 pub mod wire;
-use chrono_harness::{CommandSpec, facts};
+use commands::Spec as CommandSpec;
 use wire::{Finding, Request, Response, Status};
 mod registration;
 pub use receipt::Receipt;
@@ -419,12 +419,11 @@ fn collect_reports(
     registrations: &Registry,
     effective: &Value,
 ) -> Result<(Results, CollectedCompletion), String> {
-    let chrono_harness::units::Scope::Collect { manifest } =
-        req.scope.as_ref().ok_or("collection scope missing")?
+    let wire::Scope::Collect { manifest } = req.scope.as_ref().ok_or("collection scope missing")?
     else {
         return Err("collection requires collect scope".into());
     };
-    let units: BTreeMap<String, chrono_harness::units::Unit> =
+    let units: BTreeMap<String, wire::Unit> =
         serde_json::from_value(req.observations["execution_units"]["units"].clone())
             .map_err(|e| format!("E_COLLECTION_INPUT: units: {e}"))?;
     let root = &req.candidate.root;
@@ -445,7 +444,7 @@ fn collect_reports(
         .values()
         .map(|unit| unit.report_path.clone())
         .collect();
-    chrono_harness::units::validate_collection_paths(&manifest_path, report_path, &unit_paths)
+    reader.call::<()>(json!({"operation":"collection-paths","manifest":manifest_path,"report":report_path,"units":unit_paths}))
         .map_err(|error| format!("E_COLLECTION_INPUT: {error}"))?;
     let limits = req.observations["execution_units"]["collection_limits"]
         .as_object()
@@ -461,7 +460,7 @@ fn collect_reports(
     let bytes = report_bytes(&mut originals, &manifest_path, None, manifest_limit)
         .map_err(|e| format!("E_COLLECTION_INPUT: manifest: {e}"))?;
     let manifest_sha256 = wire::sha256(&bytes);
-    let manifest: chrono_harness::units::FullManifest = chrono_harness::decode(&bytes)?;
+    let manifest: wire::FullManifest = reader.decode(&bytes)?;
     if !matches!(
         manifest.schema.as_str(),
         "chrono-full-collection/v1" | "chrono-ci-collection/v1"
@@ -494,7 +493,7 @@ fn collect_reports(
         }
         if paths
             .iter()
-            .any(|existing| chrono_harness::units::overlap(existing, &input.path))
+            .any(|existing| crate::wire::paths_overlap(existing, &input.path))
             || !paths.insert(input.path.clone())
         {
             return Err("E_COLLECTION_INPUT: report path collision/overlap".into());
@@ -507,7 +506,7 @@ fn collect_reports(
                 input.unit
             ));
         }
-        let report = chrono_harness::json(&report_bytes)?;
+        let report = reader.decode::<Value>(&report_bytes)?;
         if reader.call::<u64>(json!({"operation":"report-transport-bytes", "report":report,"metadata_bytes": report_bytes.len()}))?
             > report_limit
         {
@@ -614,7 +613,8 @@ fn collect_reports(
         }
         let retained_artifacts: Value = originals.call(json!({"operation":"restage-map","artifacts":report["artifacts"],"transport":input.artifacts,"directory":".chrono-harness/state/imported/"}))?;
         let retained_path = format!(".chrono-harness/state/import-{}.json", input.sha256);
-        let destination = chrono_harness::no_symlink_parents(&req.candidate.root, &retained_path)?;
+        let destination: std::path::PathBuf =
+            originals.call(json!({"operation":"checked-path","path":retained_path}))?;
         match fs::OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -731,7 +731,7 @@ fn validate_unit_report(
     reader: &mut runtime_session::Session,
     req: &Request,
     registrations: &Registry,
-    units: &BTreeMap<String, chrono_harness::units::Unit>,
+    units: &BTreeMap<String, wire::Unit>,
     selected: &BTreeSet<String>,
     required: &[String],
     unit: &str,
@@ -739,14 +739,14 @@ fn validate_unit_report(
     global_plan: &Execution,
     current_effective: &Value,
     declaration_root: &Path,
-    transport: Option<&chrono_harness::prepared::ArtifactTransport>,
+    transport: Option<&wire::ArtifactTransport>,
     closure: Option<&Value>,
 ) -> Result<Results, String> {
     let top_request: Request = serde_json::from_value(report["request"].clone())
         .map_err(|e| format!("E_COLLECTION_INPUT: retained request: {e}"))?;
     reader.call::<()>(json!({"operation":"validate-request","request":&top_request}))?;
     if top_request.scope
-        != Some(chrono_harness::units::Scope::Unit {
+        != Some(wire::Scope::Unit {
             unit: unit.to_owned(),
         })
         || report["request_digest"] != wire::digest(&top_request)?
@@ -825,9 +825,6 @@ fn validate_unit_report(
         json!({"operation":"resolve-map","artifacts":report["artifacts"],"closure":closure}),
     )?;
     let artifacts = &resolved;
-    if registrations.config()["schema_version"] == 4 {
-        originals.call::<()>(json!({"operation":"check-preparation","binding":top_request.observations["preparation"],"transport":transport,"artifacts":artifacts}))?;
-    }
 
     let effective = validate_retained_request_at(
         originals,
@@ -850,7 +847,8 @@ fn validate_unit_report(
             "E_COLLECTION_INPUT: original effective inputs differ from current obligations".into(),
         );
     }
-    let artifact_dirs = facts::artifact_directories(registrations.config())?;
+    let artifact_dirs: Vec<String> =
+        reader.call(json!({"operation":"artifact-directories","config":registrations.config()}))?;
     if top_request.observations["execution_units"] != req.observations["execution_units"]
         || top_request.registries.base != top_request.base.root.join(".chrono-harness")
         || top_request.registries.candidate != top_request.candidate.root.join(".chrono-harness")
@@ -954,7 +952,8 @@ fn validate_unit_report(
         .outputs
         .get("tests")
         .ok_or("E_COLLECTION_INPUT: projects judge missing required output tests")?;
-    let owned = chrono_harness::units::select(units, selected, unit)?;
+    let owned: BTreeSet<String> = reader
+        .call(json!({"operation":"unit-tests","units":units,"unit":unit,"selected":selected}))?;
     let operations: BTreeMap<_, Vec<_>> = registrations
         .bindings
         .iter()
@@ -976,13 +975,7 @@ fn validate_unit_report(
     {
         return Err("E_COLLECTION_INPUT: original plan/input/global binding".into());
     }
-    validate_declared_tools(
-        &route_plan,
-        registrations,
-        &effective,
-        declaration_root,
-        &routes,
-    )?;
+    validate_declared_tools(originals, &route_plan, registrations, &effective, &routes)?;
     if route.outputs.get("global_graph") != declared.get("global_graph")
         || declared.get("global_graph").is_none()
     {
@@ -1065,10 +1058,11 @@ fn validate_unit_report(
             || rows[0].status != "passed"
             || rows[0].error.is_some()
             || checked["operations"].get(&operation.method.operation) != Some(&Value::Null)
-            || rows[0]
-                .receipt
-                .as_ref()
-                .is_none_or(|r| chrono_harness::observation::process_success(&r.process).is_err())
+            || rows[0].receipt.as_ref().is_none_or(|r| {
+                reader
+                    .call::<()>(json!({"operation":"check-process","process":r.process}))
+                    .is_err()
+            })
         {
             return Err(format!(
                 "E_COLLECTION_INPUT: receipt differs: {unit}/{}",
@@ -1112,7 +1106,7 @@ fn artifact_text(
     originals: &mut runtime_session::Session,
     path: &str,
     artifacts: &Value,
-    transport: Option<&chrono_harness::prepared::ArtifactTransport>,
+    transport: Option<&wire::ArtifactTransport>,
 ) -> Result<Vec<u8>, String> {
     originals
         .call::<String>(json!({
@@ -1145,10 +1139,11 @@ fn validate_retained_request_at(
     r: &Registry,
     artifacts: &Value,
     root: &Path,
-    transport: Option<&chrono_harness::prepared::ArtifactTransport>,
+    transport: Option<&wire::ArtifactTransport>,
 ) -> Result<Value, String> {
-    req.validate_at(root, &r.runner(root)?)?;
-    let ctx = chrono_harness::json(&artifact_text(
+    let mut reader = runtime_session::Session::open(root, &r.runner(root)?, "judge-evidence-v1")?;
+    reader.call::<()>(json!({"operation":"validate-request","request":req}))?;
+    let ctx: Value = reader.decode(&artifact_text(
         originals,
         req.context.path.to_str().ok_or("context address")?,
         artifacts,
@@ -1161,7 +1156,7 @@ fn validate_retained_request_at(
         return Err("E_COLLECTION_INPUT: original context bytes differ".into());
     }
     if let Some(path) = ctx["retained_inputs"].as_str() {
-        if chrono_harness::json(&artifact_text(originals, path, artifacts, transport)?)?
+        if reader.decode::<Value>(&artifact_text(originals, path, artifacts, transport)?)?
             != req.observations["retained"]
         {
             return Err("E_COLLECTION_INPUT: original retained snapshot differs".into());
@@ -1169,43 +1164,32 @@ fn validate_retained_request_at(
     }
     if r.config()["schema_version"] == 4 {
         let binding = &req.observations["preparation"];
-        let prepared: chrono_harness::prepared::PreparedCheck =
-            serde_json::from_value(binding["result"].clone())
-                .map_err(|e| format!("original preparation missing: {e}"))?;
-        if prepared.base.as_deref() != Some(req.base.commit.as_str())
-            || prepared.candidate != req.candidate.commit
-            || prepared.scope != req.scope
-            || prepared
-                .context
-                .as_ref()
-                .is_none_or(|c| c.semantic_digest != req.context.sha256)
+        originals.call::<()>(json!({"operation":"check-preparation","binding":binding,"transport":transport,"artifacts":artifacts}))?;
+        let prepared = &binding["result"];
+        if prepared["base"] != req.base.commit
+            || prepared["candidate"] != req.candidate.commit
+            || prepared["scope"] != json!(req.scope)
+            || prepared["context"]["semantic_digest"] != req.context.sha256
         {
             return Err("original preparation differs from full request".into());
         }
     }
-    validate_original_entry(req, r)?;
+    validate_original_entry(&mut reader, req, r)?;
+    reader.close()?;
     r.evidence(
         root,
         req,
         json!({"mode":"retained","artifacts":artifacts,"transport":transport}),
     )
 }
-fn validate_original_entry(req: &Request, r: &Registry) -> Result<(), String> {
-    let mut expected: Vec<String> =
-        serde_json::from_value(r.config()["canonical_check"]["argv"].clone())
-            .map_err(|e| e.to_string())?;
-    expected.extend(
-        req.scope
-            .as_ref()
-            .ok_or("original unit scope")?
-            .contract_argv(r.config()),
-    );
-    chrono_harness::validate_invocation_observation(
-        &req.observations["entry"],
-        &expected,
-        &json!({"base":req.base.commit,"candidate":req.candidate.commit}),
-    )
-    .map_err(|error| format!("E_COLLECTION_INPUT: original entry: {error}"))?;
+fn validate_original_entry(
+    reader: &mut runtime_session::Session,
+    req: &Request,
+    r: &Registry,
+) -> Result<(), String> {
+    reader
+        .call::<()>(json!({"operation":"retained-entry","request":req,"config":r.config()}))
+        .map_err(|error| format!("E_COLLECTION_INPUT: original entry: {error}"))?;
     let runner = req.candidate.root.join(
         r.config()["runner"]["path"]
             .as_str()
@@ -1227,10 +1211,10 @@ fn validate_original_entry(req: &Request, r: &Registry) -> Result<(), String> {
     Ok(())
 }
 fn validate_declared_tools(
+    originals: &mut runtime_session::Session,
     plan: &Execution,
     r: &Registry,
     effective: &Value,
-    current_root: &Path,
     routes: &Routes,
 ) -> Result<(), String> {
     let expected: BTreeSet<_> = plan
@@ -1287,10 +1271,7 @@ fn validate_declared_tools(
                 .path
                 .strip_prefix(&plan.root)
                 .map_err(|e| e.to_string())?;
-            let current = chrono_harness::no_symlink_parents(
-                current_root,
-                relative.to_str().ok_or("registered tool path")?,
-            )?;
+            let current: std::path::PathBuf = originals.call(json!({"operation":"checked-path","path":relative.to_str().ok_or("registered tool path")?}))?;
             if wire::sha256(&fs::read(current).map_err(|e| e.to_string())?) != tool.sha256 {
                 return Err("E_COLLECTION_INPUT: candidate tool bytes differ".into());
             }
@@ -1337,7 +1318,7 @@ fn verify_completion(
         .completion
         .as_ref()
         .ok_or("E_COLLECTION_INPUT: missing completion")?;
-    let units: BTreeMap<String, chrono_harness::units::Unit> =
+    let units: BTreeMap<String, wire::Unit> =
         serde_json::from_value(req.observations["execution_units"]["units"].clone())
             .map_err(|e| e.to_string())?;
     let selected: BTreeSet<_> = plan.selected.keys().cloned().collect();
@@ -1356,7 +1337,7 @@ fn verify_completion(
     let mut tools = serde_json::Map::new();
     let mut warnings = vec![];
     if req.scope
-        != Some(chrono_harness::units::Scope::Collect {
+        != Some(wire::Scope::Collect {
             manifest: completion.source.clone(),
         })
     {
@@ -1371,7 +1352,7 @@ fn verify_completion(
     {
         return Err("E_COLLECTION_INPUT: completed manifest bytes/bound differ".into());
     }
-    let manifest: chrono_harness::units::FullManifest = chrono_harness::decode(&manifest_bytes)?;
+    let manifest: wire::FullManifest = reader.decode(&manifest_bytes)?;
     if !matches!(
         manifest.schema.as_str(),
         "chrono-full-collection/v1" | "chrono-ci-collection/v1"
@@ -1413,17 +1394,7 @@ fn verify_completion(
         if !units.contains_key(unit)
             || !seen.insert(unit.to_owned())
             || source["path"]
-                != chrono_harness::prepared::original_path(
-                    &chrono_harness::prepared::Original {
-                        path: units[unit].report_path.clone(),
-                        sha256: source["sha256"].as_str().ok_or("source digest")?.into(),
-                    },
-                    serde_json::from_value::<Option<chrono_harness::prepared::ArtifactTransport>>(
-                        source["artifacts"].clone(),
-                    )
-                    .map_err(|e| e.to_string())?
-                    .as_ref(),
-                )?
+                != originals.call::<String>(json!({"operation":"resolve-original","original":{"path":units[unit].report_path,"sha256":source["sha256"].as_str().ok_or("source digest")?},"transport":source["artifacts"]}))?
         {
             return Err("E_COLLECTION_INPUT: completion source set".into());
         }
@@ -1438,7 +1409,7 @@ fn verify_completion(
         {
             return Err("E_COLLECTION_INPUT: original source bytes/address".into());
         }
-        let report = chrono_harness::json(&bytes)?;
+        let report = reader.decode::<Value>(&bytes)?;
         if reader.call::<u64>(json!({"operation":"report-transport-bytes", "report":report,"metadata_bytes": bytes.len()}))? > limit {
             return Err("original report metadata and streams exceed registered bound".into());
         }
@@ -1566,7 +1537,7 @@ fn validate_retained_response(req: &Request, response: &Response) -> Result<(), 
 
 pub fn host_runner(root: &Path) -> Result<std::path::PathBuf, String> {
     let config = registration::host_config(root)?;
-    chrono_harness::resolve_program(
+    crate::wire::resolve_program(
         root,
         config["runner"]["path"]
             .as_str()
@@ -1647,7 +1618,7 @@ fn evaluate(
 ) -> Result<(), String> {
     req.validate_at(
         &req.candidate.root,
-        &chrono_harness::resolve_program(&req.candidate.root, &req.runner.path, None)?,
+        &crate::wire::resolve_program(&req.candidate.root, &req.runner.path, None)?,
     )?;
     let r = registration::views(req, reader, observations, true)?;
     let inputs = r
@@ -1670,10 +1641,7 @@ fn evaluate(
         &r,
         &req.observations["environment"]["effective"],
     )?;
-    let dispatch = if matches!(
-        req.scope,
-        Some(chrono_harness::units::Scope::Collect { .. })
-    ) {
+    let dispatch = if matches!(req.scope, Some(wire::Scope::Collect { .. })) {
         routes.check(&plan)?;
         None
     } else {
@@ -1741,7 +1709,7 @@ fn evaluate(
     };
     snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
     let mut results = execute(&plan, &routes, &dispatch, routes.runner())?;
-    if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
+    if let Some(wire::Scope::Unit { unit }) = &req.scope {
         results.scope = Some(format!("unit:{unit}"));
     }
     if results.has_errors() {
@@ -1760,23 +1728,22 @@ fn evaluate(
                     // assigned to another required unit remains an explicit
                     // obligation in `removed`; collection adjudicates the
                     // complete transition once every unit is present.
-                    let assigned_elsewhere =
-                        if let Some(chrono_harness::units::Scope::Unit { unit }) = &req.scope {
-                            req.observations["execution_units"]["units"]
-                                .as_object()
-                                .into_iter()
-                                .flat_map(|units| units.iter())
-                                .any(|(owner, definition)| {
-                                    owner != unit
-                                        && definition["tests"]
-                                            .as_array()
-                                            .into_iter()
-                                            .flatten()
-                                            .any(|test| test.as_str() == Some(replacement))
-                                })
-                        } else {
-                            false
-                        };
+                    let assigned_elsewhere = if let Some(wire::Scope::Unit { unit }) = &req.scope {
+                        req.observations["execution_units"]["units"]
+                            .as_object()
+                            .into_iter()
+                            .flat_map(|units| units.iter())
+                            .any(|(owner, definition)| {
+                                owner != unit
+                                    && definition["tests"]
+                                        .as_array()
+                                        .into_iter()
+                                        .flatten()
+                                        .any(|test| test.as_str() == Some(replacement))
+                            })
+                    } else {
+                        false
+                    };
                     if assigned_elsewhere {
                         continue;
                     }
