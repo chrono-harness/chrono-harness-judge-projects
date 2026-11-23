@@ -7,6 +7,17 @@ fn main() -> std::process::ExitCode {
     if args.next().is_none() {
         let input = io::stdin().lock();
         let result = match name {
+            Some("execute-plan-v1") => Some(
+                std::env::current_dir()
+                    .map_err(|e| e.to_string())
+                    .and_then(|root| {
+                        chrono_judge_projects::execute_query::execute_plan(
+                            &root,
+                            input,
+                            io::stdout().lock(),
+                        )
+                    }),
+            ),
             Some("check-pairs-v1") => Some(check_pairs(input)),
             Some("read-results-v1") => {
                 Some(evidence_query::read_results(input).and_then(|reply| {

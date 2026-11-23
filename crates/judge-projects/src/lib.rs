@@ -1,8 +1,10 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
 mod compiler;
 pub mod evidence_query;
+pub mod execute_query;
 mod impact;
 mod pair_checks;
+pub mod plan_trace;
 mod receipt;
 mod routes;
 mod state;
