@@ -215,3 +215,38 @@ fn test_alias_alone_checks_the_defining_pair_and_ignores_unrelated_changes() {
             .unwrap();
     }
 }
+
+#[test]
+fn public_pair_query_rejects_shared_links_and_kind_before_language() {
+    let fixture = fixture(false, "rust", "python");
+    let mut registry = fixture.registry;
+    let base = registry.clone();
+    let query = |v: &Value| {
+        let q = json!({"registry":v,"owners":["project:p"]});
+        chrono_judge_projects::check_pairs_with(q.to_string().as_bytes(), |_| Ok(())).unwrap_err()
+    };
+    assert!(query(&registry).starts_with("E_TEST_LANGUAGE:"));
+    for (field, value) in [("test_project", "t"), ("tests_for", "p")] {
+        registry = base.clone();
+        registry["projects"]
+            .as_array_mut()
+            .unwrap()
+            .push(json!({"id":"extra",field:value}));
+        assert_eq!(
+            query(&registry),
+            "E_TEST_PAIR: nonreciprocal/shared dedicated pair project:p and project:t"
+        );
+    }
+    registry = base.clone();
+    registry["projects"][1]["kind"] = json!("production");
+    assert_eq!(
+        query(&registry),
+        "E_TEST_PAIR: nonreciprocal/shared dedicated pair project:p and project:t"
+    );
+    registry = base.clone();
+    registry["projects"][0]["test_project"] = json!("p");
+    assert_eq!(
+        query(&registry),
+        "E_TEST_PAIR: nonreciprocal/shared dedicated pair project:p and project:p"
+    );
+}
