@@ -21,6 +21,21 @@ mod compiler_fixture;
 
 verus! {
 
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn operation_diagnostic_requires_an_original_coverage_message() {
+    proof {
+        reveal_strlit("E_VERUS_COVERAGE"); reveal_strlit("test output");
+        assert("E_VERUS_COVERAGE"@.len() != "test output"@.len());
+    }
+    let original = state::report_coverage_cause(true, "E_VERUS_COVERAGE", 1);
+    let truncated = state::report_coverage_cause(false, "E_VERUS_COVERAGE", 1);
+    let unmarked = state::report_coverage_cause(true, "test output", 1);
+    let empty = state::report_coverage_cause(true, "E_VERUS_COVERAGE", 0);
+    let largest = state::report_coverage_cause(true, "E_VERUS_COVERAGE", 1024);
+    let oversized = state::report_coverage_cause(true, "E_VERUS_COVERAGE", 1025);
+    assert(original && !truncated && !unmarked && !empty && largest && !oversized);
+}
+
 #[cfg(verus_keep_ghost)]
 fn successful_execution_may_still_need_its_trace() {
     let incomplete_trace = scheduler::failure_batch::keep_scheduler_diagnostics(true, false);
