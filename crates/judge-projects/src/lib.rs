@@ -1196,17 +1196,23 @@ fn validate_original_entry(
             .ok_or("runner declaration")?,
     );
     let entry = &req.observations["entry"];
-    if entry["resolved_paths"]["paths"][0]["actual"] != json!(runner) {
+    let resolved = entry["resolved_paths"]["paths"][0]["actual"]
+        .as_str()
+        .ok_or("original resolved runner")?;
+    let cwd = entry["cwd"].as_str().ok_or("original entry cwd")?;
+    let program = entry["argv"][0].as_str().ok_or("original entry program")?;
+    let invocation = Path::new(cwd).join(program);
+    let executable = Path::new(&req.runner.path);
+    // A worktree-local launcher can resolve to a pinned installation outside
+    // the host. Bind both the original invocation and its observed executable.
+    // current_exe may also retain the literal form of a host-root alias.
+    let valid = if Path::new(resolved) == runner {
+        executable == runner || invocation == executable
+    } else {
+        invocation == runner && Path::new(resolved) == executable
+    };
+    if !valid {
         return Err("E_COLLECTION_INPUT: original runner invocation differs".into());
-    }
-    // The system may retain a host-root alias in current_exe. Keep that original
-    // coordinate, and reuse the live entry resolution without reading old roots.
-    if req.runner.path != runner.to_string_lossy() {
-        let cwd = entry["cwd"].as_str().ok_or("original entry cwd")?;
-        let program = entry["argv"][0].as_str().ok_or("original entry program")?;
-        if Path::new(cwd).join(program) != Path::new(&req.runner.path) {
-            return Err("E_COLLECTION_INPUT: original runner invocation differs".into());
-        }
     }
     Ok(())
 }
