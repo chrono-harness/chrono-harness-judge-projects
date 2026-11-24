@@ -1,5 +1,7 @@
 # chrono-harness/chrono-harness-judge-projects 工作说明
 
+提交 Issue、命名分支和交付 PR 时，遵循[协作规范](https://github.com/chrono-harness/chrono-harness-main/blob/dev/docs/contributing.md)。
+
 组件的用途、开发仓库和示例见 [Chrono Harness 用户与开发者入口](https://github.com/chrono-harness/chrono-harness-main)。
 
 执行选定项目的构建和测试并核验回执。
