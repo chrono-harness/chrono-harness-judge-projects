@@ -255,12 +255,8 @@
       "owner": "host",
       "surface": "product",
       "cost": "unmeasured",
-      "edges": [
-        {
-          "kind": "test-execution",
-          "to": "test:judge-projects-tests"
-        }
-      ]
+      "edges": [],
+      "symlink": "CLAUDE.md"
     },
     {
       "path": "CLAUDE.md",
