@@ -1,5 +1,6 @@
 //! 执行原件的终态、完整身份和保留决策；实际 IO 由 state 所有者执行。
 #![allow(unexpected_cfgs)]
+use std::collections::BTreeMap;
 use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(not(verus_keep_ghost))]
 use vstd::prelude::verus;
@@ -11,6 +12,43 @@ use vstd::prelude::*;
 pub mod operation_io;
 
 verus! {
+
+pub open spec fn selected_test_passed(results: Map<String, String>, test: String) -> bool {
+    results.contains_key(test) && results[test]@ == "passed"@
+}
+
+/// Return the actual missing or unsuccessful test so the owning operation can name it.
+pub fn uncovered_test<'a>(
+    selected: &'a [String], results: &BTreeMap<String, String>,
+) -> (missing: Option<&'a String>)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures match missing {
+        Some(test) => exists|i: int| 0 <= i < selected.len() && #[trigger] selected@[i] == *test
+            && !selected_test_passed(results@, *test)
+            && forall|j: int| 0 <= j < i ==> selected_test_passed(results@, #[trigger] selected@[j]),
+        None => forall|i: int| 0 <= i < selected.len() ==> selected_test_passed(results@, #[trigger] selected@[i]),
+    },
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut i = 0;
+    while i < selected.len()
+        invariant vstd::laws_cmp::obeys_cmp::<String>(), i <= selected.len(),
+            forall|j: int| 0 <= j < i ==> selected_test_passed(results@, #[trigger] selected@[j]),
+        decreases selected.len() - i,
+    {
+        let test = &selected[i];
+        let passed = match results.get(test) {
+            Some(status) => <&str>::exec_eq(status.as_str(), "passed"),
+            None => false,
+        };
+        if !passed {
+            assert(selected@[i as int] == *test);
+            return Some(test);
+        }
+        i += 1;
+    }
+    None
+}
 
 /// Publish one explicit coverage diagnosis from a failed operation's own complete stream.
 pub fn report_coverage_cause(complete: bool, code: &str, detail_bytes: usize) -> (report: bool)

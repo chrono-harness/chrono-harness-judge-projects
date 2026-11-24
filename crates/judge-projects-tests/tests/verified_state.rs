@@ -21,6 +21,45 @@ mod compiler_fixture;
 
 verus! {
 
+fn selected_outcome_covers_only_the_selected_ids()
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut selected = Vec::new();
+    let mut results = std::collections::BTreeMap::new();
+    let key = "test:selected".to_string();
+    let other = "test:extra".to_string();
+    proof {
+        reveal_strlit("test:selected"); reveal_strlit("test:extra");
+        reveal_strlit("passed"); reveal_strlit("passed "); reveal_strlit("failed");
+        assert(key@.len() != other@.len()); assert(key != other);
+        assert("passed"@.len() != "passed "@.len());
+        assert("passed"@[0] != "failed"@[0]);
+    }
+    results.insert(other.clone(), "failed".to_string());
+    let empty = state::uncovered_test(&selected, &results);
+    assert(empty.is_none());
+    selected.push(key.clone());
+    assert(selected@ =~= seq![key]);
+    assert(!results@.contains_key(key));
+    let missing = state::uncovered_test(&selected, &results);
+    if missing.is_none() { assert(selected@[0] == key); }
+    assert(missing == Some(&key));
+    results.insert(key.clone(), "passed ".to_string());
+    let suffix = state::uncovered_test(&selected, &results);
+    assert(suffix == Some(&key));
+    results.insert(key.clone(), "passed".to_string());
+    let complete = state::uncovered_test(&selected, &results);
+    assert(complete.is_none());
+    selected.push(other.clone());
+    assert(selected@ =~= seq![key, other]);
+    assert(state::selected_test_passed(results@, key));
+    assert(!state::selected_test_passed(results@, other));
+    let failed = state::uncovered_test(&selected, &results);
+    if failed.is_none() { assert(selected@[1] == other); }
+    assert(failed == Some(&other));
+}
+
 #[cfg_attr(not(verus_keep_ghost), test)]
 fn operation_diagnostic_requires_an_original_coverage_message() {
     proof {
