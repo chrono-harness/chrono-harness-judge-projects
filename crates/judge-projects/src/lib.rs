@@ -75,6 +75,7 @@ impl Results {
         self.executed.iter().all(|r| r.status == "passed")
             && self.blocked.is_empty()
             && self.tests.values().all(|s| s == "passed")
+            && verified_state::uncovered_test(&self.selected, &self.tests).is_none()
     }
 }
 /// Execute a plan admitted by the installed routes judge.
@@ -427,6 +428,18 @@ fn snapshot_with_reader(
     Ok(())
 }
 
+fn check_selected_coverage(
+    selected: &[String],
+    results: &BTreeMap<String, String>,
+) -> Result<(), String> {
+    if let Some(test) = verified_state::uncovered_test(selected, results) {
+        return Err(format!(
+            "E_COLLECTION_INPUT: selected test coverage is missing or failed: {test}"
+        ));
+    }
+    Ok(())
+}
+
 /// Validate transported full unit reports without invoking any business
 /// operation.  The collector consumes the original sealed request and judge
 /// observations retained by each unit; it never reconstructs or replays a
@@ -676,13 +689,8 @@ fn collect_reports(
     if required.iter().any(|unit| !seen.contains(unit)) {
         return Err("E_COLLECTION_INPUT: missing required unit report".into());
     }
-    for test in selected {
-        if tests.get(test).map(String::as_str) != Some("passed") {
-            return Err(format!(
-                "E_COLLECTION_INPUT: selected test coverage is missing or failed: {test}"
-            ));
-        }
-    }
+    let selected_ids: Vec<_> = selected.iter().cloned().collect();
+    check_selected_coverage(&selected_ids, &tests)?;
     let requests = registrations.retirements.as_ref().map_err(Clone::clone)?;
     let deferred = registrations.downstream;
     for retired in req.impact["retired_tests"]
@@ -716,7 +724,7 @@ fn collect_reports(
         schema: "chrono-collected-completion/v1".into(),
         status: "passed".into(),
         reports,
-        global_selected: selected.iter().cloned().collect(),
+        global_selected: selected_ids.clone(),
         required_units: required.clone(),
         test_sources,
         removal_sources,
@@ -727,7 +735,7 @@ fn collect_reports(
     };
     let results = Results {
         plan: plan.identity.clone(),
-        selected: selected.iter().cloned().collect(),
+        selected: selected_ids,
         executed: vec![],
         blocked: vec![],
         tests,
@@ -1504,20 +1512,22 @@ fn verify_completion(
             .or_default()
             .push("global-obligation".into());
     }
+    let selected_ids: Vec<_> = selected.into_iter().collect();
+    check_selected_coverage(&selected_ids, &tests)?;
     if completion.schema != "chrono-collected-completion/v1"
         || completion.status != "passed"
         || results.scope.as_deref() != Some("collect")
         || results.plan != plan.identity
         || !results.executed.is_empty()
         || !results.blocked.is_empty()
-        || results.selected != selected.iter().cloned().collect::<Vec<_>>()
+        || results.selected != selected_ids
         || results.removed != removed
         || completion.warnings != warnings
         || completion.test_sources != test_sources
         || completion.removal_sources != removal_sources
         || required.iter().any(|unit| !seen.contains(unit))
         || completion.required_units != required
-        || completion.global_selected != selected.iter().cloned().collect::<Vec<_>>()
+        || completion.global_selected != selected_ids
         || results.tests != tests
         || completion.tools != Value::Object(tools)
     {

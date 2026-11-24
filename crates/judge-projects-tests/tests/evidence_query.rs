@@ -19,6 +19,14 @@ fn result_queries_keep_the_native_wire_shape_and_outcome() {
     assert!(result.get("scope").is_none() && result.get("custom").is_none());
     raw["tests"]["test:t"] = json!("failed");
     assert_eq!(read(&raw)["passed"], false);
+    raw["tests"] = json!({"test:other":"passed"});
+    assert_eq!(read(&raw)["passed"], false);
+    raw["tests"] = json!({});
+    assert_eq!(read(&raw)["passed"], false);
+    raw["selected"] = json!([]);
+    assert_eq!(read(&raw)["passed"], true);
+    raw["tests"] = json!({"test:other":"failed"});
+    assert_eq!(read(&raw)["passed"], false);
     raw["tests"] = json!([]);
     assert!(read_results(raw.to_string().as_bytes()).is_err());
 }
