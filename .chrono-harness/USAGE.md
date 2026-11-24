@@ -14,4 +14,4 @@
 
 ## 本仓验证
 
-产品位于 [`crates/judge-projects`](../crates/judge-projects)。原生测试位于 [`crates/judge-projects-tests`](../crates/judge-projects-tests)。在仓库根目录运行 `mise exec -- ./check.sh` 执行本仓的检查。
+产品位于 [`crates/judge-projects`](../crates/judge-projects)。原生测试位于 [`crates/judge-projects-tests`](../crates/judge-projects-tests)。在仓库根目录运行 `mise exec -- ./check.sh`。本地和 GitHub 使用同一份 Git DELTA、项目操作和证明根登记。GitHub 单元产出两组产品／测试证明及实际项目行为回执，再由汇总作业读取单元原件。
