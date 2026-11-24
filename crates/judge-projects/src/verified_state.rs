@@ -12,6 +12,13 @@ pub mod operation_io;
 
 verus! {
 
+/// Publish one explicit coverage diagnosis from a failed operation's own complete stream.
+pub fn report_coverage_cause(complete: bool, code: &str, detail_bytes: usize) -> (report: bool)
+    ensures report == (complete && code@ == "E_VERUS_COVERAGE"@ && 0 < detail_bytes <= 1024),
+{
+    complete && <&str>::exec_eq(code, "E_VERUS_COVERAGE") && detail_bytes > 0 && detail_bytes <= 1024
+}
+
 /// process_terminal 是现役 process_completion_known 对真实退出码／signal
 /// 及全部自有工作加入结果的判断。
 /// None 精确保留没有回执，与已返回但终态未知的 Some(false) 分开。

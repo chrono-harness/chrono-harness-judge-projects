@@ -258,6 +258,18 @@ fn execute(
     state.finish(&mut results)?;
     Ok(results)
 }
+
+fn reported_coverage_cause(bytes: &[u8], complete: bool) -> Option<&str> {
+    bytes.split(|&byte| byte == b'\n').find_map(|line| {
+        let line = std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok()?;
+        let (code, detail) = line.split_once(": ")?;
+        (verified_state::report_coverage_cause(complete, code, detail.len())
+            && !detail.trim().is_empty()
+            && !detail.chars().any(char::is_control))
+        .then_some(line)
+    })
+}
+
 fn execute_operation(
     plan: &Execution,
     index: usize,
@@ -292,10 +304,17 @@ fn execute_operation(
             let (error, status) = if let Some(error) = infrastructure {
                 (Some(error), "error")
             } else if receipt.process.exit_code != 0 {
-                (
-                    Some(format!("operation exit {}", receipt.process.exit_code)),
-                    "failed",
-                )
+                let process = &receipt.process;
+                let exit = format!("operation exit {}", process.exit_code);
+                let cause = reported_coverage_cause(&process.stderr_bytes, process.stderr_complete)
+                    .or_else(|| {
+                        reported_coverage_cause(&process.stdout_bytes, process.stdout_complete)
+                    });
+                let message = match cause {
+                    Some(line) => format!("{line} ({exit})"),
+                    None => exit,
+                };
+                (Some(message), "failed")
             } else {
                 (None, "passed")
             };
