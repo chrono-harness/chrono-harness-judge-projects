@@ -28,3 +28,15 @@
 执行普通和单元计划前，projects 用安装的 routes 的 `dispatch-plan-v1` 校验计划，读取并发上限和完整操作下标次序。启动进程前先核对计划身份和下标覆盖。正在运行的操作继续占用原计划声明的资源与输出路径，完成后再检查下一批就绪操作。
 
 项目登记通过已安装的 `chrono-judge-registration` 解释。执行和收集从固定端点取得登记，按宿主选择的程序调用 `project-views-v1`。执行结束后重查现场输入，收集时从原产物和保留视图核对有效输入。`check-pairs-v1` 从当前宿主的 `.chrono-harness/config.json` 选定登记程序，独立调用时可从 PATH 提供。配对、语言和真实执行证据仍由 projects 判定。安装本仓固定的 registration 发行即可运行这些入口。
+
+## 开发机检查原件
+
+本仓将本地检查准备、工作树输入、单元执行和汇总诊断的原件登记给已安装的 runner。保留窗口为 24 小时。需要长期保留的结果请在窗口内复制到持久存储。当前报告和活跃读者持有引用；结果已替换、读者已释放且期限届满后，维护会回收实际文件。采用前生成的旧文件需要按原生产者和最后使用方核对。
+
+在运行过本仓检查的长期主检出，开发者可在自己的 crontab 中加入以下条目，将绝对路径替换为本仓主检出。定时器每小时调用同一个 runner 维护请求。移除该条目即可取消定时维护。
+
+```cron
+0 * * * * cd '/absolute/path/to/chrono-harness-judge-projects' && .chrono-harness/bin/chrono-harness retention --host-root . --request .chrono-harness/maintain-checks.json >/dev/null
+```
+
+GitHub Actions 的单元原件保留 1 天。汇总归档随 GitHub 仓库设置滚动；采用时仓库配置为 90 天。
