@@ -23,7 +23,9 @@ fi
 if [ "${GITHUB_ACTIONS:-}" = true ]; then
     export MISE_TRUSTED_CONFIG_PATHS="$PWD"
 fi
-set -- chrono-harness chrono-worktree chrono-diagnostics chrono-ci chrono-judge-ci chrono-judge-routes chrono-judge-registration chrono-judge-projects chrono-judge-filemap chrono-host-bootstrap verus
+if [ "$#" -eq 0 ]; then
+    set -- chrono-harness chrono-worktree chrono-diagnostics chrono-ci chrono-judge-ci chrono-judge-routes chrono-judge-registration chrono-judge-projects chrono-judge-filemap chrono-host-bootstrap verus
+fi
 mkdir -p .chrono-harness/bin
 for tool do
     if ! executable=$("$manager" which "$tool" 2>/dev/null); then
