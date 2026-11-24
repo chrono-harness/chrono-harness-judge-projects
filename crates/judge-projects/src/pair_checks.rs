@@ -3,6 +3,26 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
+struct RegistryLinks<'a> {
+    rows: &'a [Value],
+    test_field: &'a str,
+}
+
+impl verified_languages::PairTable for RegistryLinks<'_> {
+    fn len(&self) -> usize {
+        self.rows.len()
+    }
+
+    fn link(&self, index: usize, forward: bool) -> Option<&str> {
+        let field = if forward {
+            self.test_field
+        } else {
+            "tests_for"
+        };
+        self.rows[index][field].as_str()
+    }
+}
+
 pub(crate) fn dedicated_pair<'a>(
     registry: &Value,
     collection: &'a [Value],
@@ -33,21 +53,20 @@ pub(crate) fn dedicated_pair<'a>(
     };
     let prod_id = production["id"].as_str().unwrap();
     let test_id = test["id"].as_str().unwrap();
-    if production[test_field] != test["id"]
-        || test["tests_for"] != production["id"]
-        || prod_id == test_id
-        || collection
-            .iter()
-            .filter(|p| p[test_field] == test["id"])
-            .count()
-            != 1
-        || collection
-            .iter()
-            .filter(|p| p["tests_for"] == production["id"])
-            .count()
-            != 1
-        || prefix == "project" && (production["kind"] != "production" || test["kind"] != "test")
-    {
+    let links = RegistryLinks {
+        rows: collection,
+        test_field,
+    };
+    if !verified_languages::dedicated_pair(
+        &links,
+        prefix,
+        prod_id,
+        test_id,
+        production[test_field].as_str(),
+        test["tests_for"].as_str(),
+        production["kind"].as_str(),
+        test["kind"].as_str(),
+    ) {
         return Err(format!(
             "E_TEST_PAIR: nonreciprocal/shared dedicated pair {prefix}:{prod_id} and {prefix}:{test_id}"
         ));

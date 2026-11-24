@@ -6,8 +6,44 @@ mod languages;
 use vstd::prelude::verus;
 #[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
+#[cfg(verus_keep_ghost)]
+use vstd::vpanic as panic;
 
 verus! {
+
+pub struct PairRows<'a> { pub rows: &'a [(Option<&'a str>, Option<&'a str>)] }
+impl<'a> languages::PairTable for PairRows<'a> {
+    open spec fn size(&self) -> nat { self.rows@.len() }
+    open spec fn target(&self, i: int, forward: bool) -> Option<Seq<char>> {
+        languages::text(if forward { self.rows@[i].0 } else { self.rows@[i].1 })
+    }
+    fn len(&self) -> usize { self.rows.len() }
+    fn link(&self,i: usize,forward: bool) -> Option<&str> {
+        if forward { self.rows[i].0 } else { self.rows[i].1 }
+    }
+}
+
+fn expect_pair(b: bool) requires b { if !b { panic!(); } }
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn a_dedicated_pair_has_exactly_one_link_each_way_and_project_kinds() {
+    proof {
+        reveal_strlit("p"); reveal_strlit("t");
+        assert("p"@[0]=='p' && "t"@[0]=='t');
+        reveal_strlit("production"); reveal_strlit("test");
+        assert("production"@.len()!="test"@.len());
+        reveal_with_fuel(languages::claims,4);
+    }
+    let rows=[(Some("t"),None),(None,Some("p"))];
+    let table=PairRows{rows:&rows};
+    expect_pair(languages::dedicated_pair(&table,"project","p","t",Some("t"),Some("p"),Some("production"),Some("test")));
+    expect_pair(!languages::dedicated_pair(&table,"project","p","t",Some("t"),None,Some("production"),Some("test")));
+    expect_pair(!languages::dedicated_pair(&table,"project","p","p",Some("p"),Some("p"),Some("production"),Some("test")));
+    expect_pair(!languages::dedicated_pair(&table,"project","p","t",Some("t"),Some("p"),Some("test"),Some("test")));
+    let repeated=[(Some("t"),None),(None,Some("p")),(Some("t"),None)];
+    let shared=PairRows{rows:&repeated};
+    expect_pair(!languages::dedicated_pair(&shared,"project","p","t",Some("t"),Some("p"),Some("production"),Some("test")));
+}
 
 // 任意完整字符串相等都接受；非空约束由登记 schema 的既有所有者负责。
 #[cfg(verus_keep_ghost)]
