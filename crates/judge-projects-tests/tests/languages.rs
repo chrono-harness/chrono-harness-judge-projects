@@ -101,6 +101,31 @@ fn same_declared_language_accepts_arbitrary_host_languages_and_paths() {
 }
 
 #[test]
+fn broken_dedicated_pairs_name_the_requested_owners() {
+    for (script, key, prefix, field) in [
+        (false, "projects", "project", "test_project"),
+        (true, "scripts", "script", "test_script"),
+    ] {
+        let mut case = fixture(script, "rust", "rust");
+        let check_pair = |case: &PairCase, selected: &str, expected: &str| {
+            let error = case
+                .check(&BTreeSet::from([format!("{prefix}:{selected}")]))
+                .unwrap_err();
+            assert!(error.starts_with("E_TEST_PAIR:"), "{error}");
+            for id in [selected, expected] {
+                assert!(error.contains(&format!("{prefix}:{id}")), "{error}");
+            }
+        };
+        case.registry[key][0][field] = json!("absent-test");
+        check_pair(&case, "p", "absent-test");
+        case.registry[key][0][field] = json!("t");
+        case.registry[key][1]["tests_for"] = json!("absent-production");
+        check_pair(&case, "t", "absent-production");
+        check_pair(&case, "p", "t");
+    }
+}
+
+#[test]
 fn shell_python_exception_is_explicit_and_directional() {
     for script in [false, true] {
         let prefix = if script { "script" } else { "project" };

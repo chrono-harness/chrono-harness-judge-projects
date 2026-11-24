@@ -10,23 +10,24 @@ pub(crate) fn dedicated_pair<'a>(
     test_field: &str,
     row: &'a Value,
 ) -> Result<(&'a Value, &'a Value), String> {
+    let row_id = row["id"].as_str().unwrap();
     let (production, test) = if let Some(test) = row[test_field].as_str() {
         (
             row,
-            collection
-                .iter()
-                .find(|p| p["id"] == test)
-                .ok_or("E_TEST_PAIR: missing dedicated test")?,
+            collection.iter().find(|p| p["id"] == test).ok_or_else(|| {
+                format!(
+                    "E_TEST_PAIR: {prefix}:{row_id} names missing dedicated test {prefix}:{test}"
+                )
+            })?,
         )
     } else {
         let prod = row["tests_for"]
             .as_str()
-            .ok_or("E_TEST_PAIR: tests_for missing")?;
+            .ok_or_else(|| format!("E_TEST_PAIR: {prefix}:{row_id} is missing tests_for"))?;
         (
-            collection
-                .iter()
-                .find(|p| p["id"] == prod)
-                .ok_or("E_TEST_PAIR: missing production")?,
+            collection.iter().find(|p| p["id"] == prod).ok_or_else(|| {
+                format!("E_TEST_PAIR: {prefix}:{row_id} names missing production {prefix}:{prod}")
+            })?,
             row,
         )
     };
@@ -47,7 +48,9 @@ pub(crate) fn dedicated_pair<'a>(
             != 1
         || prefix == "project" && (production["kind"] != "production" || test["kind"] != "test")
     {
-        return Err("E_TEST_PAIR: nonreciprocal/shared dedicated pair".into());
+        return Err(format!(
+            "E_TEST_PAIR: nonreciprocal/shared dedicated pair {prefix}:{prod_id} and {prefix}:{test_id}"
+        ));
     }
     if registry["schema_version"] == 2 {
         let implementation = production["language"].as_str().unwrap();
