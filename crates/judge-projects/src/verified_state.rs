@@ -97,6 +97,88 @@ pub fn uncovered_test<'a>(
     None
 }
 
+/// Receipt and original payloads are carried through the wire without inspecting them here.
+#[cfg_attr(not(verus_keep_ghost), derive(Clone, Debug, serde::Serialize, serde::Deserialize))]
+pub struct OperationRow<R, O> {
+    pub operation: String,
+    pub status: String,
+    pub receipt: Option<R>,
+    pub error: Option<String>,
+    #[cfg_attr(not(verus_keep_ghost), serde(default, skip_serializing_if = "Option::is_none"))]
+    pub original: Option<O>,
+}
+
+pub fn has_execution_error<R, O>(executed: &[OperationRow<R, O>]) -> (found: bool)
+    ensures found == exists|i: int| 0 <= i < executed.len() && #[trigger] executed@[i].status@ == "error"@,
+{
+    let mut i = 0;
+    while i < executed.len()
+        invariant i <= executed.len(),
+            forall|j: int| 0 <= j < i ==> #[trigger] executed@[j].status@ != "error"@,
+        decreases executed.len() - i,
+    {
+        if <&str>::exec_eq(executed[i].status.as_str(), "error") {
+            return true;
+        }
+        i += 1;
+    }
+    false
+}
+
+pub open spec fn all_test_statuses_passed(results: Map<String, String>) -> bool {
+    forall|status: String| #[trigger] results.values().contains(status) ==> status@ == "passed"@
+}
+
+fn test_statuses_pass(tests: &BTreeMap<String, String>) -> (passed: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures passed == all_test_statuses_passed(tests@),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut statuses = tests.values();
+    loop
+        invariant 0 <= statuses@.0 <= statuses@.1.len(),
+            statuses@.1.to_set() == tests@.values(),
+            forall|j: int| 0 <= j < statuses@.0 ==> #[trigger] statuses@.1[j]@ == "passed"@,
+        decreases statuses@.1.len() - statuses@.0,
+    {
+        let Some(status) = statuses.next() else {
+            assert forall|value: String| #[trigger] tests@.values().contains(value) implies value@ == "passed"@ by {
+                assert(statuses@.1.contains(value));
+                let j = choose|j: int| 0 <= j < statuses@.1.len() && statuses@.1[j] == value;
+                assert(statuses@.1[j]@ == "passed"@);
+            }
+            return true;
+        };
+        if !<&str>::exec_eq(status.as_str(), "passed") {
+            assert(tests@.values().contains(*status));
+            return false;
+        }
+    }
+}
+
+pub fn report_passed<R, O>(
+    executed: &[OperationRow<R, O>], blocked: usize, selected: &[String], tests: &BTreeMap<String, String>,
+) -> (passed: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures passed == (blocked == 0
+        && (forall|i: int| 0 <= i < executed.len() ==> #[trigger] executed@[i].status@ == "passed"@)
+        && all_test_statuses_passed(tests@)
+        && (forall|i: int| 0 <= i < selected.len() ==> selected_test_passed(tests@, #[trigger] selected@[i]))),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    if blocked != 0 { return false; }
+    let mut i = 0;
+    while i < executed.len()
+        invariant i <= executed.len(),
+            forall|j: int| 0 <= j < i ==> #[trigger] executed@[j].status@ == "passed"@,
+        decreases executed.len() - i,
+    {
+        if !<&str>::exec_eq(executed[i].status.as_str(), "passed") { return false; }
+        i += 1;
+    }
+    test_statuses_pass(tests) && uncovered_test(selected, tests).is_none()
+}
+
 /// Publish one explicit coverage diagnosis from a failed operation's own complete stream.
 pub fn report_coverage_cause(complete: bool, code: &str, detail_bytes: usize) -> (report: bool)
     ensures report == (complete && code@ == "E_VERUS_COVERAGE"@ && 0 < detail_bytes <= 1024),
