@@ -141,6 +141,12 @@ fn shell_python_exception_is_explicit_and_directional() {
             let error = case.check(&affected).unwrap_err();
             assert!(error.starts_with("E_TEST_LANGUAGE:"), "{error}");
             assert!(error.contains(implementation) && error.contains(testing));
+            let collection = if script { "scripts" } else { "projects" };
+            let entry = &case.registry[collection][1]["actions"]["execute"];
+            assert!(
+                error.contains(&format!("actions.execute={entry}")),
+                "{error}"
+            );
         }
     }
 }

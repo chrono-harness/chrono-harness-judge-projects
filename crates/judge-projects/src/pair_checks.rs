@@ -75,9 +75,10 @@ pub(crate) fn dedicated_pair<'a>(
         let implementation = production["language"].as_str().unwrap();
         let testing = test["language"].as_str().unwrap();
         if !verified_languages::dedicated_test_language(implementation, testing) {
+            let entry = &test["actions"]["execute"];
             return Err(format!(
                 "E_TEST_LANGUAGE: {prefix}:{prod_id} declares {implementation:?}, \
-             but its dedicated test {prefix}:{test_id} declares {testing:?}; \
+             but its dedicated test {prefix}:{test_id} declares {testing:?} at actions.execute={entry}; \
              require the same language or the declared shell-to-python exception"
             ));
         }
