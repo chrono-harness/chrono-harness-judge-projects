@@ -1084,6 +1084,16 @@ fn validate_unit_report(
             ));
         }
     }
+    let helper_evidence = assertion_helpers(registrations.projects(), &route_plan, &results)?;
+    if projects.outputs.get("assertion_helpers")
+        != (!helper_evidence.is_empty())
+            .then(|| json!(helper_evidence))
+            .as_ref()
+    {
+        return Err(format!(
+            "E_COLLECTION_INPUT: {unit} assertion helper evidence differs from the original receipts"
+        ));
+    }
     let evidence = &report["unit_evidence"];
     let all_tests: BTreeSet<_> = units
         .values()
@@ -1638,6 +1648,98 @@ pub fn judge(req: &Request) -> Response {
     }
     response
 }
+/// Check only helper operations explicitly assigned assertion responsibility for a selected test.
+/// The checked execution plan and the retained direct process identify what actually ran.
+pub(crate) fn assertion_helpers(
+    projects: &Value,
+    plan: &crate::routes::Execution,
+    results: &crate::Results,
+) -> Result<Vec<Value>, String> {
+    let mut evidence = Vec::new();
+    for (collection, prefix) in [("projects", "project"), ("scripts", "script")] {
+        let members = projects[collection]
+            .as_array()
+            .ok_or("projects collection missing")?;
+        for dedicated in members {
+            let Some(helpers) = dedicated["assertion_helpers"].as_object() else {
+                continue;
+            };
+            let Some(production) = members
+                .iter()
+                .find(|row| row["id"] == dedicated["tests_for"])
+            else {
+                return Err("E_TEST_PAIR: assertion helper has no production unit".into());
+            };
+            let implementation = production["language"]
+                .as_str()
+                .ok_or("production language missing")?;
+            for (test, operations) in helpers {
+                let Some(selected) = plan.selected.get(test) else {
+                    continue;
+                };
+                for operation in operations
+                    .as_array()
+                    .ok_or("assertion helper list required")?
+                {
+                    let name = operation
+                        .as_str()
+                        .ok_or("assertion helper operation required")?;
+                    if !selected.operations.iter().any(|id| id == name) {
+                        return Err(format!(
+                            "E_TEST_BINDING: {test} assertion helper {name} is absent from its registered execution plan"
+                        ));
+                    }
+                    let actual = results
+                        .executed
+                        .iter()
+                        .find(|entry| entry.operation == name)
+                        .and_then(|entry| entry.receipt.as_ref());
+                    let Some(receipt) = actual else {
+                        if results
+                            .tests
+                            .get(test)
+                            .is_some_and(|status| status == "passed")
+                        {
+                            return Err(format!(
+                                "E_EXECUTION: {test} assertion helper {name} has no receipt"
+                            ));
+                        }
+                        continue;
+                    };
+                    let method = &plan
+                        .operations
+                        .iter()
+                        .find(|op| op.method.operation == name)
+                        .ok_or("E_EXECUTION: assertion helper method missing")?
+                        .method;
+                    if receipt.operation != name
+                        || receipt.plan != plan.identity
+                        || receipt.method != crate::wire::digest(method)?
+                    {
+                        return Err(format!(
+                            "E_EXECUTION: {test} assertion helper {name} receipt differs from its method"
+                        ));
+                    }
+                    let producer = format!("{prefix}:{}", production["id"].as_str().unwrap());
+                    let language = pair_checks::assertion_language(
+                        projects,
+                        &producer,
+                        implementation,
+                        test,
+                        &method.owner,
+                        name,
+                        &receipt.process.argv,
+                        &receipt.digest,
+                    )?;
+                    evidence.push(serde_json::json!({"test":test, "production":producer, "operation":name,
+                        "owner":method.owner, "language":language, "method":receipt.method, "receipt":receipt.digest}));
+                }
+            }
+        }
+    }
+    Ok(evidence)
+}
+
 fn evaluate(
     req: &Request,
     response: &mut Response,
@@ -1781,6 +1883,12 @@ fn evaluate(
     response
         .outputs
         .insert("tests".into(), serde_json::to_value(&results).unwrap());
+    let helpers = assertion_helpers(r.projects(), &plan, &results)?;
+    if !helpers.is_empty() {
+        response
+            .outputs
+            .insert("assertion_helpers".into(), json!(helpers));
+    }
     snapshot_with_reader(&req.candidate.commit, &artifacts, reader)?;
     r.evidence(&req.candidate.root, req, json!({"mode":"live"}))
         .map_err(|e| format!("E_EVIDENCE_UNRESOLVED: post-execution {e}"))?;

@@ -200,3 +200,42 @@ pub(crate) fn check<'a>(
     }
     Ok(())
 }
+
+/// The checked method supplies the helper owner and the original process supplies its argv.
+pub(crate) fn assertion_language<'a>(
+    registry: &'a Value,
+    production: &str,
+    implementation: &str,
+    test: &str,
+    owner: &str,
+    operation: &str,
+    argv: &[String],
+    receipt: &str,
+) -> Result<&'a str, String> {
+    let (kind, id) = owner
+        .split_once(':')
+        .ok_or("assertion helper owner missing")?;
+    let table = match kind {
+        "project" => "projects",
+        "script" => "scripts",
+        _ => {
+            return Err(format!(
+                "E_TEST_BINDING: invalid assertion helper owner {owner}"
+            ));
+        }
+    };
+    let language = registry[table]
+        .as_array()
+        .and_then(|rows| rows.iter().find(|row| row["id"].as_str() == Some(id)))
+        .and_then(|row| row["language"].as_str())
+        .ok_or_else(|| {
+            format!("E_TEST_BINDING: assertion helper {owner} has no registered language")
+        })?;
+    if !verified_languages::dedicated_test_language(implementation, language) {
+        return Err(format!(
+            "E_TEST_LANGUAGE: {production} declares {implementation:?}, but {test} executed assertion helper {owner} ({language:?}), operation {operation}, argv={}, receipt={receipt}",
+            serde_json::json!(argv)
+        ));
+    }
+    Ok(language)
+}
