@@ -31,12 +31,6 @@
 
 ## 开发机检查原件
 
-本仓将本地检查准备、工作树输入、单元执行和汇总诊断的原件登记给已安装的 runner。保留窗口为 24 小时。需要长期保留的结果请在窗口内复制到持久存储。当前报告和活跃读者持有引用；结果已替换、读者已释放且期限届满后，维护会回收实际文件。采用前生成的旧文件需要按原生产者和最后使用方核对。
-
-在运行过本仓检查的长期主检出，开发者可在自己的 crontab 中加入以下条目，将绝对路径替换为本仓主检出。定时器每小时调用同一个 runner 维护请求。移除该条目即可取消定时维护。
-
-```cron
-0 * * * * cd '/absolute/path/to/chrono-harness-judge-projects' && .chrono-harness/bin/chrono-harness retention --host-root . --request .chrono-harness/maintain-checks.json >/dev/null
-```
+本仓在每次操作目录生成 Verus 库与 dep-info，项目判官核查登记证据后释放。成功的本地最后一份报告按 24 小时窗口保留，到期维护会等待真实读者退出。需要长期保存的原件在窗口内转存并从检出外读回。定时任务与本仓选择见[开发机检查原件](.chrono-harness/USAGE.md#开发机检查原件)。
 
 GitHub Actions 的单元原件保留 1 天。汇总归档随 GitHub 仓库设置滚动；采用时仓库配置为 90 天。
