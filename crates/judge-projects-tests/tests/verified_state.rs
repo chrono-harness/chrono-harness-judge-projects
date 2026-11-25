@@ -21,6 +21,38 @@ mod compiler_fixture;
 
 verus! {
 
+fn observed_reply(value: u8, diagnostic: Option<String>) -> (out: Result<(), String>)
+    ensures match diagnostic {
+        Some(original) => out == Err::<(), String>(original),
+        None => if value == 7 { out.is_ok() } else { out matches Err(e) && e@ == "bad result"@ },
+    },
+{
+    match diagnostic {
+        Some(original) => Err(original),
+        None => if value == 7 { Ok(()) } else { Err("bad result".to_string()) },
+    }
+}
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn query_keeps_execution_publication_and_error_sink_outcomes() {
+    let matched = state::admit_query_location(true, true);
+    let other_root = state::admit_query_location(false, true);
+    let relative = state::admit_query_location(true, false);
+    assert(matched.is_ok() && other_root.is_err() && relative.is_err());
+
+    let ok = state::publish_plan(Ok(7u8), None, observed_reply);
+    let diagnostic = state::publish_plan(Ok(7u8), Some("trace".to_string()), observed_reply);
+    let work = state::publish_plan(Err("work".to_string()), Some("trace".to_string()), observed_reply);
+    assert(ok.is_ok());
+    assert(diagnostic matches Err(e) && e@ == "trace"@);
+    assert(work matches Err(e) && e@ == "work"@);
+
+    let done = state::query_exit(Ok(()), |_e: String| false);
+    let reported = state::query_exit(Err("work".to_string()), |_e: String| true);
+    let broken_pipe = state::query_exit(Err("work".to_string()), |_e: String| false);
+    assert(done == 0 && reported == 2 && broken_pipe == 2);
+}
+
 #[cfg_attr(not(verus_keep_ghost), test)]
 fn dispatch_admission_checks_the_entire_index_order() {
     let empty = state::admit_dispatch_order(&[], 0);

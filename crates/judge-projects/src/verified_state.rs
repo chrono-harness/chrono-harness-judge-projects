@@ -13,6 +13,40 @@ pub mod operation_io;
 
 verus! {
 
+/// Check the two path observations before opening either the host runner or the routes program.
+pub fn admit_query_location(same_root: bool, absolute_routes: bool) -> (res: Result<(), &'static str>)
+    ensures res.is_ok() == (same_root && absolute_routes),
+        res matches Err(e) ==> e@ == "E_PLAN_BINDING: execute from the plan root with an absolute routes executable"@,
+{
+    if same_root && absolute_routes { Ok(()) } else {
+        Err("E_PLAN_BINDING: execute from the plan root with an absolute routes executable")
+    }
+}
+
+/// A failed execution keeps its own error. A completed execution publishes its actual
+/// result together with the first trace error, and returns the publisher's write/flush result.
+pub fn publish_plan<T, F>(
+    work: Result<T, String>, diagnostic: Option<String>, publish: F,
+) -> (out: Result<(), String>)
+    where F: FnOnce(T, Option<String>) -> Result<(), String>,
+    requires forall|value: T| work == Ok::<T, String>(value) ==> #[trigger] publish.requires((value, diagnostic)),
+    ensures match work {
+        Err(error) => out == Err::<(), String>(error),
+        Ok(value) => publish.ensures((value, diagnostic), out),
+    },
+{
+    match work { Err(error) => Err(error), Ok(value) => publish(value, diagnostic) }
+}
+
+/// A diagnostic sink may reject the message after the query already failed.
+pub fn query_exit<F>(result: Result<(), String>, emit: F) -> (code: u8)
+    where F: FnOnce(String) -> bool,
+    requires forall|e: String| result == Err::<(), String>(e) ==> #[trigger] emit.requires((e,)),
+    ensures code == (if result.is_ok() { 0u8 } else { 2u8 }),
+{
+    match result { Ok(()) => 0, Err(error) => { emit(error); 2 } }
+}
+
 /// A length-n sequence of distinct indices in 0..n is a permutation of the operations.
 pub open spec fn dispatch_order_covers(order: Seq<usize>, count: nat) -> bool {
     order.len() == count

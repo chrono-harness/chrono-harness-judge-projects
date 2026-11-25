@@ -30,11 +30,10 @@ struct RouteCommand {
 
 pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result<(), String> {
     let query: ExecuteRequest = serde_json::from_reader(input).map_err(|err| err.to_string())?;
-    if query.plan.root != root || !query.routes.executable.is_absolute() {
-        return Err(
-            "E_PLAN_BINDING: execute from the plan root with an absolute routes executable".into(),
-        );
-    }
+    crate::verified_state::admit_query_location(
+        query.plan.root == root,
+        query.routes.executable.is_absolute(),
+    )?;
     let routes = Routes::bound(
         root,
         crate::host_runner(root)?,
@@ -48,7 +47,7 @@ pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result
         let dispatch = routes.dispatch(&query.plan)?;
         execute(&query.plan, &routes, &dispatch, routes.runner())
     };
-    let (results, diagnostic_error) = if let Some(level) = query.diagnostics {
+    let (execution, diagnostic_error) = if let Some(level) = query.diagnostics {
         let level: LevelFilter = level
             .parse()
             .map_err(|_| "E_USAGE: unknown diagnostics level")?;
@@ -68,7 +67,7 @@ pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result
             }
         });
         let subscriber = tracing_subscriber::registry().with(level).with(layer);
-        let result = tracing::subscriber::with_default(subscriber, work)?;
+        let result = tracing::subscriber::with_default(subscriber, work);
         (
             result,
             trace_error
@@ -78,21 +77,23 @@ pub fn execute_plan(root: &Path, input: impl Read, output: impl Write) -> Result
                 .map(|error| error.to_string()),
         )
     } else {
-        (work()?, None)
+        (work(), None)
     };
     #[derive(Serialize)]
     struct Reply {
         results: crate::Results,
         diagnostic_error: Option<String>,
     }
-    let mut output = output;
-    serde_json::to_writer(
-        &mut output,
-        &Reply {
-            results,
-            diagnostic_error,
-        },
-    )
-    .map_err(|e| e.to_string())?;
-    output.flush().map_err(|e| e.to_string())
+    crate::verified_state::publish_plan(execution, diagnostic_error, |results, diagnostic_error| {
+        let mut output = output;
+        serde_json::to_writer(
+            &mut output,
+            &Reply {
+                results,
+                diagnostic_error,
+            },
+        )
+        .map_err(|error| error.to_string())?;
+        output.flush().map_err(|error| error.to_string())
+    })
 }
