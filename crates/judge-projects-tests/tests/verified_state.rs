@@ -76,6 +76,46 @@ fn execution_row(status: &str) -> (row: state::OperationRow<(), ()>)
     state::OperationRow { operation: String::new(), status: status.to_string(), receipt: None, error: None, original: None }
 }
 
+fn unit_test_results_require_exact_ownership_and_success()
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut owned = std::collections::BTreeSet::new();
+    let mut tests = std::collections::BTreeMap::new();
+    let first = "first".to_string();
+    let other = "second".to_string();
+    proof {
+        reveal_strlit("first"); reveal_strlit("second");
+        reveal_strlit("passed"); reveal_strlit("failed");
+        assert(first@.len() != other@.len());
+        assert("passed"@[0] != "failed"@[0]);
+    }
+    let empty = state::unit_test_results_complete(&owned, &tests);
+    assert(empty);
+    owned.insert(first.clone());
+    let missing = state::unit_test_results_complete(&owned, &tests);
+    assert(!missing);
+    tests.insert(other.clone(), "passed".to_string());
+    assert(owned@.contains(first) && !tests@.contains_key(first));
+    let wrong_key = state::unit_test_results_complete(&owned, &tests);
+    assert(!wrong_key);
+    tests.insert(first.clone(), "passed".to_string());
+    assert(tests@.contains_key(other) && !owned@.contains(other));
+    let extra = state::unit_test_results_complete(&owned, &tests);
+    assert(!extra);
+    owned.insert(other.clone());
+    assert(tests@.dom() =~= owned@);
+    assert forall|id: String| owned@.contains(id) implies state::selected_test_passed(tests@, id) by {
+        assert(id == first || id == other);
+    }
+    let complete = state::unit_test_results_complete(&owned, &tests);
+    assert(complete);
+    tests.insert(other.clone(), "failed".to_string());
+    assert(owned@.contains(other) && !state::selected_test_passed(tests@, other));
+    let failed = state::unit_test_results_complete(&owned, &tests);
+    assert(!failed);
+}
+
 fn whole_report_distinguishes_blocked_failed_error_and_unselected_tests()
     requires vstd::laws_cmp::obeys_cmp::<String>(),
 {
