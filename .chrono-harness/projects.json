@@ -26,10 +26,10 @@
             "2",
             "--output-json",
             "--compile",
-            "--emit=link=.chrono-harness/state/verify.project-languages.rlib,dep-info=.chrono-harness/state/verify.project-languages.rlib.d",
+            "--emit=link={operation_state}/verify.project-languages.rlib,dep-info={operation_state}/verify.project-languages.rlib.d",
             "crates/judge-projects/src/verified_languages.rs",
             "-o",
-            ".chrono-harness/state/verify.project-languages.rlib",
+            "{operation_state}/verify.project-languages.rlib",
             "-Zchecksum-hash-algorithm=sha256"
           ],
           "output_contract": {
@@ -48,10 +48,10 @@
             "2",
             "--output-json",
             "--compile",
-            "--emit=link=.chrono-harness/state/verify.project-state.rlib,dep-info=.chrono-harness/state/verify.project-state.rlib.d",
+            "--emit=link={operation_state}/verify.project-state.rlib,dep-info={operation_state}/verify.project-state.rlib.d",
             "crates/judge-projects/src/verified_state.rs",
             "-o",
-            ".chrono-harness/state/verify.project-state.rlib",
+            "{operation_state}/verify.project-state.rlib",
             "-Zchecksum-hash-algorithm=sha256"
           ],
           "output_contract": {
@@ -81,10 +81,10 @@
             "2",
             "--output-json",
             "--compile",
-            "--emit=link=.chrono-harness/state/verify.project-languages-tests.rlib,dep-info=.chrono-harness/state/verify.project-languages-tests.rlib.d",
+            "--emit=link={operation_state}/verify.project-languages-tests.rlib,dep-info={operation_state}/verify.project-languages-tests.rlib.d",
             "crates/judge-projects-tests/tests/verified_languages.rs",
             "-o",
-            ".chrono-harness/state/verify.project-languages-tests.rlib",
+            "{operation_state}/verify.project-languages-tests.rlib",
             "-Zchecksum-hash-algorithm=sha256"
           ],
           "output_contract": {
@@ -103,10 +103,10 @@
             "2",
             "--output-json",
             "--compile",
-            "--emit=link=.chrono-harness/state/verify.project-state-tests.rlib,dep-info=.chrono-harness/state/verify.project-state-tests.rlib.d",
+            "--emit=link={operation_state}/verify.project-state-tests.rlib,dep-info={operation_state}/verify.project-state-tests.rlib.d",
             "crates/judge-projects-tests/tests/verified_state.rs",
             "-o",
-            ".chrono-harness/state/verify.project-state-tests.rlib",
+            "{operation_state}/verify.project-state-tests.rlib",
             "-Zchecksum-hash-algorithm=sha256"
           ],
           "output_contract": {
