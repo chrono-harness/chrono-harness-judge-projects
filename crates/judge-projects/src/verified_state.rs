@@ -1,6 +1,6 @@
 //! 执行原件的终态、完整身份和保留决策；实际 IO 由 state 所有者执行。
 #![allow(unexpected_cfgs)]
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use vstd::contrib::exec_spec::ExecSpecEq;
 #[cfg(not(verus_keep_ghost))]
 use vstd::prelude::verus;
@@ -234,6 +234,50 @@ fn test_statuses_pass(tests: &BTreeMap<String, String>) -> (passed: bool)
         };
         if !<&str>::exec_eq(status.as_str(), "passed") {
             assert(tests@.values().contains(*status));
+            return false;
+        }
+    }
+}
+
+/// A unit report must account for exactly the tests assigned to this unit.
+pub fn unit_test_results_complete(
+    owned: &BTreeSet<String>, tests: &BTreeMap<String, String>,
+) -> (complete: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures complete == (tests@.dom() == owned@
+        && forall|id: String| owned@.contains(id) ==> selected_test_passed(tests@, id)),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    if owned.len() != tests.len() {
+        return false;
+    }
+    let mut ids = owned.iter();
+    loop
+        invariant
+            vstd::laws_cmp::obeys_cmp::<String>(),
+            tests@.dom().len() == owned@.len(),
+            ids@.1.to_set() == owned@,
+            0 <= ids@.0 <= ids@.1.len(),
+            forall|j: int| 0 <= j < ids@.0 ==> selected_test_passed(tests@, #[trigger] ids@.1[j]),
+        decreases ids@.1.len() - ids@.0,
+    {
+        let Some(id) = ids.next() else {
+            assert forall|id: String| owned@.contains(id) implies selected_test_passed(tests@, id) by {
+                assert(ids@.1.contains(id));
+                let j = choose|j: int| 0 <= j < ids@.1.len() && ids@.1[j] == id;
+                assert(selected_test_passed(tests@, ids@.1[j]));
+            }
+            proof { vstd::set_lib::lemma_subset_equality(owned@, tests@.dom()); }
+            return true;
+        };
+        let passed = match tests.get(id) {
+            Some(status) => <&str>::exec_eq(status.as_str(), "passed"),
+            None => false,
+        };
+        assert(passed == selected_test_passed(tests@, *id));
+        assert(ids@.1[ids@.0 - 1] == *id);
+        if !passed {
+            assert(owned@.contains(*id));
             return false;
         }
     }

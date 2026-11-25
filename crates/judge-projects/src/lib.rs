@@ -1027,8 +1027,7 @@ fn validate_unit_report(
         || results.scope != Some(format!("unit:{unit}"))
         || results.completion.is_some()
         || results.blocked.len() > 0
-        || results.tests.keys().cloned().collect::<BTreeSet<_>>() != owned
-        || results.tests.values().any(|s| s != "passed")
+        || !verified_state::unit_test_results_complete(&owned, &results.tests)
         || results.executed.len() != route_plan.operations.len()
     {
         return Err(format!(
