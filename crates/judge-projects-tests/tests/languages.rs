@@ -256,3 +256,40 @@ fn public_pair_query_rejects_shared_links_and_kind_before_language() {
         "E_TEST_PAIR: nonreciprocal/shared dedicated pair project:p and project:p"
     );
 }
+
+#[test]
+fn observed_assertion_helper_uses_its_registered_owner_language() {
+    let registry = serde_json::json!({"scripts":[{"id":"driver","language":"shell"},{"id":"foreign","language":"python"}]});
+    let argv = vec!["/opaque/runner".into(), "python is just data".into()];
+    let check = |implementation, owner| {
+        pair_checks::assertion_language(
+            &registry,
+            "project:unit",
+            implementation,
+            "test:unit",
+            owner,
+            "verify.helper",
+            &argv,
+            "receipt-17",
+        )
+    };
+    assert_eq!(check("shell", "script:foreign").unwrap(), "python");
+    assert_eq!(check("python", "script:foreign").unwrap(), "python");
+    let mismatch = check("python", "script:driver").unwrap_err();
+    for evidence in [
+        "E_TEST_LANGUAGE",
+        "project:unit",
+        "test:unit",
+        "script:driver",
+        "verify.helper",
+        "python is just data",
+        "receipt-17",
+    ] {
+        assert!(mismatch.contains(evidence), "{mismatch}");
+    }
+    assert!(
+        check("python", "script:missing")
+            .unwrap_err()
+            .starts_with("E_TEST_BINDING")
+    );
+}

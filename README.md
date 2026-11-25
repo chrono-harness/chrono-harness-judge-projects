@@ -34,3 +34,9 @@
 本仓在每次操作目录生成 Verus 库与 dep-info，项目判官核查登记证据后释放。成功的本地最后一份报告按 24 小时窗口保留，到期维护会等待真实读者退出。需要长期保存的原件在窗口内转存并从检出外读回。定时任务与本仓选择见[开发机检查原件](.chrono-harness/USAGE.md#开发机检查原件)。
 
 GitHub Actions 的单元原件保留 1 天。汇总归档随 GitHub 仓库设置滚动；采用时仓库配置为 90 天。
+
+### 已登记的断言 helper
+
+专属测试若把断言交给已有的独立操作，可在 projects v2 的测试行登记 `assertion_helpers`。例如 `{"test:word_count_test":["words.check-result"]}` 把该操作的断言职责归给指定测试。使用支持该字段的 registration 和 projects 判官，并在该测试的 FILEMAP 执行计划登记同一操作。
+
+full 运行从已核对的操作方法取得所有者及其语言，从原进程取得实际参数和回执身份。语言冲突返回 `E_TEST_LANGUAGE`。Shell 生产单元可使用 Python 测试。单元原件在汇总时再次核对定位到该测试和操作的证据。未登记断言职责的后代，其语言仍未知。
