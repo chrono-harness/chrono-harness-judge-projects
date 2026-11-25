@@ -97,6 +97,89 @@ pub fn uncovered_test<'a>(
     None
 }
 
+/// A collected original can preserve an explicit retirement without a replacement.
+/// Live and first-time collection require a registered downstream validator for that case.
+pub fn declared_removal<'a>(
+    declared: Option<&'a Option<String>>, allow_without_replacement: bool,
+) -> (accepted: Option<&'a Option<String>>)
+    ensures accepted == match declared {
+        Some(target) if target.is_some() || allow_without_replacement => declared,
+        _ => None,
+    },
+{
+    match declared {
+        Some(target) if target.is_some() || allow_without_replacement => Some(target),
+        _ => None,
+    }
+}
+
+/// A unit may hand an unexecuted replacement to its registered peer.
+pub fn replacement_covered(status: Option<&String>, assigned_to_peer: bool) -> (ok: bool)
+    ensures ok == (assigned_to_peer || match status {
+        Some(s) => s@ == "passed"@, None => false,
+    }),
+{
+    assigned_to_peer || match status {
+        Some(s) => <&str>::exec_eq(s.as_str(), "passed"),
+        None => false,
+    }
+}
+
+pub open spec fn same_target(a: Option<String>, b: Option<String>) -> bool {
+    match (a,b) {
+        (Some(x), Some(y)) => x@ == y@,
+        (None,None) => true,
+        _ => false,
+    }
+}
+
+fn same_replacement(a: &Option<String>, b: &Option<String>) -> (equal: bool)
+    ensures equal == same_target(*a, *b),
+{
+    match (a,b) {
+        (Some(x),Some(y)) => <&str>::exec_eq(x.as_str(),y.as_str()),
+        (None,None) => true,
+        _ => false,
+    }
+}
+
+/// Merge one unit or global obligation, preserving source order and all other keys.
+pub fn record_removal(
+    removed: &mut BTreeMap<String, Option<String>>, sources: &mut BTreeMap<String, Vec<String>>,
+    id: &String, replacement: &Option<String>, source: &str,
+) -> (accepted: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures
+        accepted == (!old(removed)@.contains_key(*id) || same_target(old(removed)@[*id], *replacement)),
+        accepted ==> removed@.dom() == old(removed)@.dom().insert(*id),
+        accepted ==> same_target(removed@[*id], *replacement),
+        accepted ==> forall|other: String| other != *id && old(removed)@.contains_key(other) ==>
+            #[trigger] removed@[other] == old(removed)@[other],
+        accepted ==> sources@.dom() == old(sources)@.dom().insert(*id),
+        accepted ==> sources@[*id]@.len() ==
+            (if old(sources)@.contains_key(*id) { old(sources)@[*id]@.len() } else { 0 }) + 1,
+        accepted ==> sources@[*id]@.last()@ == source@,
+        accepted && old(sources)@.contains_key(*id) ==> sources@[*id]@.drop_last() == old(sources)@[*id]@,
+        accepted ==> forall|other: String| other != *id && old(sources)@.contains_key(other) ==>
+            #[trigger] sources@[other] == old(sources)@[other],
+        !accepted ==> removed@ == old(removed)@ && sources@ == old(sources)@,
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    if let Some(previous) = removed.get(id) {
+        if !same_replacement(previous,replacement) { return false; }
+    } else {
+        let value = match replacement {
+            Some(target) => Some(target.clone()),
+            None => None,
+        };
+        removed.insert(id.clone(), value);
+    }
+    let mut names = sources.remove(id).unwrap_or(Vec::new());
+    names.push(source.to_string());
+    sources.insert(id.clone(), names);
+    true
+}
+
 /// Receipt and original payloads are carried through the wire without inspecting them here.
 #[cfg_attr(not(verus_keep_ghost), derive(Clone, Debug, serde::Serialize, serde::Deserialize))]
 pub struct OperationRow<R, O> {

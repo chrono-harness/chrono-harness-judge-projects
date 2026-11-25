@@ -35,6 +35,41 @@ fn dispatch_admission_checks_the_entire_index_order() {
     assert(past_end.is_err());
 }
 
+fn retirement_obligations_keep_the_order_and_original_target()
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    proof { reveal_strlit("passed"); reveal_strlit("failed"); assert("passed"@[0] != "failed"@[0]); }
+    let original = "test:old".to_string();
+    let replacement = Some("test:new".to_string());
+    let explicit_none: Option<String> = None;
+    let admitted = state::declared_removal(Some(&replacement), false);
+    let missing = state::declared_removal(None, true);
+    let no_validator = state::declared_removal(Some(&explicit_none), false);
+    let deferred = state::declared_removal(Some(&explicit_none), true);
+    assert(admitted == Some(&replacement) && missing.is_none() && no_validator.is_none() && deferred == Some(&explicit_none));
+
+    let passed = "passed".to_string();
+    let failed = "failed".to_string();
+    let local = state::replacement_covered(Some(&passed), false);
+    let peer = state::replacement_covered(None, true);
+    let absent = state::replacement_covered(None, false);
+    let unsuccessful = state::replacement_covered(Some(&failed), false);
+    assert(local && peer && !absent && !unsuccessful);
+
+    let mut targets = std::collections::BTreeMap::new();
+    let mut sources = std::collections::BTreeMap::new();
+    let first = state::record_removal(&mut targets, &mut sources, &original, &replacement, "example");
+    let same = state::record_removal(&mut targets, &mut sources, &original, &replacement, "harness");
+    let wrong = state::record_removal(&mut targets, &mut sources, &original, &explicit_none, "wrong");
+    let global = state::record_removal(&mut targets, &mut sources, &original, &replacement, "global-obligation");
+    assert(first && same && !wrong && global);
+    assert(sources@[original]@.len() == 3);
+    assert(sources@[original]@[0]@ == "example"@ && sources@[original]@[1]@ == "harness"@
+        && sources@[original]@[2]@ == "global-obligation"@);
+    assert(state::same_target(targets@[original], replacement));
+}
+
 fn execution_row(status: &str) -> (row: state::OperationRow<(), ()>)
     ensures row.status@ == status@,
 {
