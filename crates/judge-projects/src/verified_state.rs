@@ -13,6 +13,53 @@ pub mod operation_io;
 
 verus! {
 
+/// A length-n sequence of distinct indices in 0..n is a permutation of the operations.
+pub open spec fn dispatch_order_covers(order: Seq<usize>, count: nat) -> bool {
+    order.len() == count
+        && (forall|i: int| 0 <= i < order.len() ==> #[trigger] order[i] < count)
+        && (forall|i: int, j: int| 0 <= i < j < order.len() ==>
+            #[trigger] order[i] != #[trigger] order[j])
+}
+
+/// Admit the actual order returned by routes before any worker indexes the plan.
+pub fn admit_dispatch_order(order: &[usize], count: usize) -> (result: Result<(), &'static str>)
+    ensures result.is_ok() == dispatch_order_covers(order@, count as nat),
+        result matches Err(message) ==> message@ ==
+            "E_EXECUTION_PLAN: routes dispatch order must cover every operation once"@,
+{
+    let invalid = "E_EXECUTION_PLAN: routes dispatch order must cover every operation once";
+    if order.len() != count {
+        return Err(invalid);
+    }
+    let mut seen = vec![false; count];
+    let mut i = 0;
+    while i < order.len()
+        invariant
+            invalid@ == "E_EXECUTION_PLAN: routes dispatch order must cover every operation once"@,
+            order.len() == count, seen.len() == count, i <= count,
+            forall|j: int| 0 <= j < i ==> #[trigger] order@[j] < count,
+            forall|a: int, b: int| 0 <= a < b < i ==>
+                #[trigger] order@[a] != #[trigger] order@[b],
+            forall|slot: int| 0 <= slot < count ==> #[trigger] seen@[slot] ==
+                (exists|j: int| 0 <= j < i && #[trigger] order@[j] == slot),
+        decreases count - i,
+    {
+        let index = order[i];
+        if index >= count {
+            assert(order@[i as int] >= count);
+            return Err(invalid);
+        }
+        if seen[index] {
+            assert(exists|j: int| 0 <= j < i && #[trigger] order@[j] == index);
+            return Err(invalid);
+        }
+        seen[index] = true;
+        assert(order@[i as int] == index);
+        i += 1;
+    }
+    Ok(())
+}
+
 pub open spec fn selected_test_passed(results: Map<String, String>, test: String) -> bool {
     results.contains_key(test) && results[test]@ == "passed"@
 }

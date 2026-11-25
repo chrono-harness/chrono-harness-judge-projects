@@ -21,6 +21,20 @@ mod compiler_fixture;
 
 verus! {
 
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn dispatch_admission_checks_the_entire_index_order() {
+    let empty = state::admit_dispatch_order(&[], 0);
+    let reordered = state::admit_dispatch_order(&[2, 0, 1], 3);
+    let short = state::admit_dispatch_order(&[1, 0], 3);
+    let repeated = state::admit_dispatch_order(&[0, 1, 0], 3);
+    let past_end = state::admit_dispatch_order(&[0, 2], 2);
+    assert(empty.is_ok());
+    assert(reordered.is_ok());
+    assert(short.is_err());
+    assert(repeated.is_err());
+    assert(past_end.is_err());
+}
+
 fn selected_outcome_covers_only_the_selected_ids()
     requires vstd::laws_cmp::obeys_cmp::<String>(),
 {

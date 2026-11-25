@@ -100,19 +100,7 @@ pub(super) struct Dispatch {
 
 impl Dispatch {
     fn admit(&self, count: usize) -> Result<(), String> {
-        let mut seen = vec![false; count];
-        let invalid = "E_EXECUTION_PLAN: routes dispatch order must cover every operation once";
-        if self.order.len() != count {
-            return Err(invalid.into());
-        }
-        for &index in &self.order {
-            let visited = seen.get_mut(index).ok_or(invalid)?;
-            if *visited {
-                return Err(invalid.into());
-            }
-            *visited = true;
-        }
-        Ok(())
+        crate::verified_state::admit_dispatch_order(&self.order, count).map_err(String::from)
     }
 }
 
