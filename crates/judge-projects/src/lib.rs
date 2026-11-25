@@ -589,17 +589,17 @@ fn collect_reports(
                 .push(input.unit.clone());
         }
         for (retired, replacement) in &unit_results.removed {
-            if let Some(previous) = removed.insert(retired.clone(), replacement.clone()) {
-                if previous != *replacement {
-                    return Err(format!(
-                        "E_COLLECTION_INPUT: conflicting removal coverage: {retired}"
-                    ));
-                }
+            if !verified_state::record_removal(
+                &mut removed,
+                &mut removal_sources,
+                retired,
+                replacement,
+                &input.unit,
+            ) {
+                return Err(format!(
+                    "E_COLLECTION_INPUT: conflicting removal coverage: {retired}"
+                ));
             }
-            removal_sources
-                .entry(retired.clone())
-                .or_default()
-                .push(input.unit.clone());
         }
         for finding in report["findings"].as_array().ok_or("unit findings")? {
             if finding["level"] == "warning" {
@@ -693,26 +693,20 @@ fn collect_reports(
         .flatten()
         .filter_map(Value::as_str)
     {
-        let expected = match requests.get(retired) {
-            Some(Some(replacement)) => Some(replacement.clone()),
-            Some(None) if deferred => None,
-            _ => return Err(format!("E_REQUIRED_TEST_REMOVED: {retired}")),
-        };
-        match removed.get(retired) {
-            Some(actual) if actual != &expected => {
-                return Err(format!(
-                    "E_COLLECTION_INPUT: removal obligation differs from registration: {retired}"
-                ));
-            }
-            Some(_) => {}
-            None => {
-                removed.insert(retired.to_owned(), expected);
-            }
+        let id = retired.to_owned();
+        let expected = verified_state::declared_removal(requests.get(&id), deferred)
+            .ok_or_else(|| format!("E_REQUIRED_TEST_REMOVED: {retired}"))?;
+        if !verified_state::record_removal(
+            &mut removed,
+            &mut removal_sources,
+            &id,
+            expected,
+            "global-obligation",
+        ) {
+            return Err(format!(
+                "E_COLLECTION_INPUT: removal obligation differs from registration: {retired}"
+            ));
         }
-        removal_sources
-            .entry(retired.to_owned())
-            .or_default()
-            .push("global-obligation".into());
     }
     let completion = CollectedCompletion {
         schema: "chrono-collected-completion/v1".into(),
@@ -1474,11 +1468,15 @@ fn verify_completion(
             test_sources.entry(test).or_default().push(unit.to_owned());
         }
         for (test, replacement) in verified.removed {
-            removed.insert(test.clone(), replacement);
-            removal_sources
-                .entry(test)
-                .or_default()
-                .push(unit.to_owned());
+            if !verified_state::record_removal(
+                &mut removed,
+                &mut removal_sources,
+                &test,
+                &replacement,
+                unit,
+            ) {
+                return Err("removal source conflict".into());
+            }
         }
         for (id, t) in unit_tools(&report)?.as_object().unwrap() {
             if tools
@@ -1496,15 +1494,17 @@ fn verify_completion(
         .flatten()
         .filter_map(Value::as_str)
     {
-        let expected = requests.get(retired).ok_or("retirement declaration")?;
-        if removed.get(retired).is_some_and(|r| r != expected) {
+        let id = retired.to_owned();
+        let expected = requests.get(&id).ok_or("retirement declaration")?;
+        if !verified_state::record_removal(
+            &mut removed,
+            &mut removal_sources,
+            &id,
+            expected,
+            "global-obligation",
+        ) {
             return Err("removal source conflict".into());
         }
-        removed.insert(retired.to_owned(), expected.clone());
-        removal_sources
-            .entry(retired.to_owned())
-            .or_default()
-            .push("global-obligation".into());
     }
     let selected_ids: Vec<_> = selected.into_iter().collect();
     check_selected_coverage(&selected_ids, &tests)?;
@@ -1747,47 +1747,36 @@ fn evaluate(
     let requests = r.retirements.as_ref().map_err(Clone::clone)?;
     let deferred = r.downstream;
     for removed in &impact.retired_tests {
-        match requests.get(removed) {
-            Some(Some(replacement)) => {
-                results
-                    .removed
-                    .insert(removed.clone(), Some(replacement.clone()));
-                if results.tests.get(replacement).map(String::as_str) != Some("passed") {
-                    // A unit contributes only its owned plans.  A replacement
-                    // assigned to another required unit remains an explicit
-                    // obligation in `removed`; collection adjudicates the
-                    // complete transition once every unit is present.
-                    let assigned_elsewhere = if let Some(wire::Scope::Unit { unit }) = &req.scope {
-                        req.observations["execution_units"]["units"]
-                            .as_object()
-                            .into_iter()
-                            .flat_map(|units| units.iter())
-                            .any(|(owner, definition)| {
-                                owner != unit
-                                    && definition["tests"]
-                                        .as_array()
-                                        .into_iter()
-                                        .flatten()
-                                        .any(|test| test.as_str() == Some(replacement))
-                            })
-                    } else {
-                        false
-                    };
-                    if assigned_elsewhere {
-                        continue;
-                    }
-                    response
-                        .outputs
-                        .insert("tests".into(), serde_json::to_value(&results).unwrap());
-                    return Err(format!(
-                        "E_REQUIRED_TEST_REMOVED: replacement did not succeed: {removed}"
-                    ));
-                }
+        let target = verified_state::declared_removal(requests.get(removed), deferred)
+            .ok_or_else(|| format!("E_REQUIRED_TEST_REMOVED: {removed}"))?;
+        results.removed.insert(removed.clone(), target.clone());
+        if let Some(replacement) = target {
+            let assigned_to_peer = match &req.scope {
+                Some(wire::Scope::Unit { unit }) => req.observations["execution_units"]["units"]
+                    .as_object()
+                    .into_iter()
+                    .flatten()
+                    .any(|(owner, definition)| {
+                        owner != unit
+                            && definition["tests"]
+                                .as_array()
+                                .into_iter()
+                                .flatten()
+                                .any(|test| test.as_str() == Some(replacement))
+                    }),
+                _ => false,
+            };
+            if !verified_state::replacement_covered(
+                results.tests.get(replacement),
+                assigned_to_peer,
+            ) {
+                response
+                    .outputs
+                    .insert("tests".into(), serde_json::to_value(&results).unwrap());
+                return Err(format!(
+                    "E_REQUIRED_TEST_REMOVED: replacement did not succeed: {removed}"
+                ));
             }
-            Some(None) if deferred => {
-                results.removed.insert(removed.clone(), None);
-            }
-            _ => return Err(format!("E_REQUIRED_TEST_REMOVED: {removed}")),
         }
     }
     response
