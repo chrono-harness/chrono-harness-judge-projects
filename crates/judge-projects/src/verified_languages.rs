@@ -79,4 +79,23 @@ pub fn dedicated_test_language(implementation: &str, testing: &str) -> (accepted
             && <&str>::exec_eq(testing, "python")
 }
 
+/// Registration has already decoded the document. The version and both original
+/// language fields determine whether this pair is admitted.
+pub fn registered_test_language(version: Option<u64>, implementation: Option<&str>, testing: Option<&str>) -> (accepted: bool)
+    ensures accepted == (version == Some(1u64) ||
+        version == Some(2u64) && match (text(implementation), text(testing)) {
+            (Some(a), Some(b)) => language_pair(a, b),
+            _ => false,
+        }),
+{
+    match version {
+        Some(1) => true,
+        Some(2) => match (implementation, testing) {
+            (Some(a), Some(b)) => dedicated_test_language(a, b),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
 }
