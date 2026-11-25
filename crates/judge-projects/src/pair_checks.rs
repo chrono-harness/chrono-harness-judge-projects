@@ -71,17 +71,19 @@ pub(crate) fn dedicated_pair<'a>(
             "E_TEST_PAIR: nonreciprocal/shared dedicated pair {prefix}:{prod_id} and {prefix}:{test_id}"
         ));
     }
-    if registry["schema_version"] == 2 {
-        let implementation = production["language"].as_str().unwrap();
-        let testing = test["language"].as_str().unwrap();
-        if !verified_languages::dedicated_test_language(implementation, testing) {
-            let entry = &test["actions"]["execute"];
-            return Err(format!(
-                "E_TEST_LANGUAGE: {prefix}:{prod_id} declares {implementation:?}, \
-             but its dedicated test {prefix}:{test_id} declares {testing:?} at actions.execute={entry}; \
+    let implementation = &production["language"];
+    let testing = &test["language"];
+    if !verified_languages::registered_test_language(
+        registry["schema_version"].as_u64(),
+        implementation.as_str(),
+        testing.as_str(),
+    ) {
+        let entry = &test["actions"]["execute"];
+        return Err(format!(
+            "E_TEST_LANGUAGE: {prefix}:{prod_id} declares {implementation}, \
+             but its dedicated test {prefix}:{test_id} declares {testing} at actions.execute={entry}; \
              require the same language or the declared shell-to-python exception"
-            ));
-        }
+        ));
     }
     Ok((production, test))
 }

@@ -150,4 +150,29 @@ fn equality_keeps_arbitrary_unicode_and_nul_text() {
     assert(!different);
 }
 
+fn version_one_preserves_pairs_without_language_fields() {
+    let accepted = languages::registered_test_language(Some(1), None, None);
+    assert(accepted);
+}
+
+fn version_two_requires_both_fields(implementation: &str, testing: &str) {
+    let missing_test = languages::registered_test_language(Some(2), Some(implementation), None);
+    let missing_product = languages::registered_test_language(Some(2), None, Some(testing));
+    assert(!missing_test && !missing_product);
+}
+
+fn version_two_checks_the_declared_pair(implementation: &str, testing: &str) {
+    let accepted = languages::registered_test_language(Some(2), Some(implementation), Some(testing));
+    assert(accepted == (implementation@ == testing@ ||
+        implementation@ == "shell"@ && testing@ == "python"@));
+}
+
+fn unsupported_versions_cannot_disable_language_admission(version: u64, language: &str)
+    requires version != 1, version != 2,
+{
+    let absent = languages::registered_test_language(None, Some(language), Some(language));
+    let unknown = languages::registered_test_language(Some(version), Some(language), Some(language));
+    assert(!absent && !unknown);
+}
+
 }
