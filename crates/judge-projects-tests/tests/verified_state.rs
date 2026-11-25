@@ -35,6 +35,62 @@ fn dispatch_admission_checks_the_entire_index_order() {
     assert(past_end.is_err());
 }
 
+fn execution_row(status: &str) -> (row: state::OperationRow<(), ()>)
+    ensures row.status@ == status@,
+{
+    state::OperationRow { operation: String::new(), status: status.to_string(), receipt: None, error: None, original: None }
+}
+
+fn whole_report_distinguishes_blocked_failed_error_and_unselected_tests()
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    proof {
+        reveal_strlit("passed"); reveal_strlit("failed"); reveal_strlit("error"); reveal_strlit("passed ");
+        assert("failed"@[0] != "passed"@[0]); assert("failed"@[0] != "error"@[0]);
+        assert("passed "@.len() != "passed"@.len()); assert("passed"@[0] != "error"@[0]);
+    }
+    let empty: [state::OperationRow<(), ()>; 0] = [];
+    let mut tests = std::collections::BTreeMap::new();
+    let mut selected = Vec::new();
+    let ok = state::report_passed(&empty, 0, &selected, &tests);
+    let blocked = state::report_passed(&empty, 1, &selected, &tests);
+    let no_errors = state::has_execution_error(&empty);
+    assert(ok && !blocked && !no_errors);
+
+    let passed = [execution_row("passed")];
+    let failed = [execution_row("failed")];
+    let typo = [execution_row("passed ")];
+    let late_error = [execution_row("failed"), execution_row("error")];
+    let normal = state::report_passed(&passed, 0, &selected, &tests);
+    let rejected = state::report_passed(&failed, 0, &selected, &tests);
+    let nonstandard = state::report_passed(&typo, 0, &selected, &tests);
+    let ordinary_failure = state::has_execution_error(&failed);
+    let is_error = state::has_execution_error(&late_error);
+    assert(normal && !rejected && !nonstandard && !ordinary_failure && is_error);
+
+    let key = "test:actual".to_string();
+    selected.push(key.clone());
+    let missing = state::report_passed(&passed, 0, &selected, &tests);
+    assert(selected@[0] == key);
+    assert(!state::selected_test_passed(tests@, selected@[0]));
+    assert(!missing);
+    tests.insert(key.clone(), "passed".to_string());
+    let covered = state::report_passed(&passed, 0, &selected, &tests);
+    assert(covered);
+    let other = "unexpected:test".to_string();
+    proof { reveal_strlit("test:actual"); reveal_strlit("unexpected:test"); assert(key@.len() != other@.len()); }
+    let failure = "failed".to_string();
+    tests.insert(other.clone(), failure.clone());
+    broadcast use vstd::map_lib::group_map_properties;
+    assert(tests@.dom().contains(other));
+    assert(tests@[other] == failure);
+    assert(tests@.values().contains(failure));
+    assert(!state::all_test_statuses_passed(tests@));
+    let extra_failed = state::report_passed(&passed, 0, &selected, &tests);
+    assert(!extra_failed);
+}
+
 fn selected_outcome_covers_only_the_selected_ids()
     requires vstd::laws_cmp::obeys_cmp::<String>(),
 {

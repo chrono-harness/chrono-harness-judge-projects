@@ -32,6 +32,31 @@ fn result_queries_keep_the_native_wire_shape_and_outcome() {
 }
 
 #[test]
+fn result_query_checks_executed_and_blocked_operations() {
+    let operation = json!({"operation":"compile","status":"passed","receipt":null,"error":null});
+    let base = json!({"plan":"p","selected":[],"executed":[operation],"blocked":[],"tests":{},"removed":{}});
+    for (status, expected) in [
+        ("passed", true),
+        ("failed", false),
+        ("error", false),
+        ("passed ", false),
+    ] {
+        let mut report = base.clone();
+        report["executed"][0]["status"] = json!(status);
+        let reply = read_results(report.to_string().as_bytes()).unwrap();
+        assert_eq!(reply["passed"], expected, "{status}");
+        assert_eq!(reply["results"]["executed"][0]["status"], status);
+    }
+    let mut blocked = base;
+    blocked["blocked"] =
+        json!([{"operation":"deploy","status":"blocked","receipt":null,"error":null}]);
+    assert_eq!(
+        read_results(blocked.to_string().as_bytes()).unwrap()["passed"],
+        false
+    );
+}
+
+#[test]
 fn incomplete_collection_query_is_rejected_before_reading_the_checkout() {
     let error = check_collection(std::path::Path::new("."), b"{}".as_slice()).unwrap_err();
     assert!(error.contains("missing field"));

@@ -28,15 +28,7 @@ use std::{
     fs,
     path::Path,
 };
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct OperationResult {
-    pub operation: String,
-    pub status: String,
-    pub receipt: Option<Receipt>,
-    pub error: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub original: Option<Value>,
-}
+pub type OperationResult = verified_state::OperationRow<Receipt, Value>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Results {
     pub plan: String,
@@ -69,13 +61,15 @@ pub struct CollectedCompletion {
 }
 impl Results {
     pub fn has_errors(&self) -> bool {
-        self.executed.iter().any(|r| r.status == "error")
+        verified_state::has_execution_error(&self.executed)
     }
     pub fn passed(&self) -> bool {
-        self.executed.iter().all(|r| r.status == "passed")
-            && self.blocked.is_empty()
-            && self.tests.values().all(|s| s == "passed")
-            && verified_state::uncovered_test(&self.selected, &self.tests).is_none()
+        verified_state::report_passed(
+            &self.executed,
+            self.blocked.len(),
+            &self.selected,
+            &self.tests,
+        )
     }
 }
 /// Execute a plan admitted by the installed routes judge.
