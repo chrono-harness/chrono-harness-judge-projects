@@ -14,6 +14,7 @@ mod runtime_session;
 mod state;
 mod verified_languages;
 mod verified_state;
+pub use verified_state::query_exit;
 pub mod wire;
 use commands::Spec as CommandSpec;
 use wire::{Finding, Request, Response, Status};

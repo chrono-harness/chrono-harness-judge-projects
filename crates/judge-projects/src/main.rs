@@ -43,13 +43,10 @@ fn main() -> std::process::ExitCode {
             _ => None,
         };
         if let Some(result) = result {
-            return match result {
-                Ok(()) => std::process::ExitCode::SUCCESS,
-                Err(error) => {
-                    eprintln!("{error}");
-                    2.into()
-                }
-            };
+            return chrono_judge_projects::query_exit(result, |error| {
+                writeln!(io::stderr().lock(), "{error}").is_ok()
+            })
+            .into();
         }
     }
     let arguments: Vec<_> = std::env::args_os().skip(1).collect();
