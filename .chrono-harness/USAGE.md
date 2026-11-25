@@ -31,3 +31,5 @@
 ```cron
 0 * * * * cd '/absolute/path/to/repository' && '/absolute/path/to/mise' run harness-maintain-checks >/dev/null
 ```
+
+原生检查入口用 `chrono-host-bootstrap native-scratch run PROGRAM [ARG ...]` 启动编译或测试。子程序从 `CHRONO_NATIVE_SCRATCH` 取得本次专用目录。成功且读者退出后即可回收；失败或中断的目录保留 86400 秒，仍持租约时继续保全。需要留存的诊断应在窗口内转存并核对摘要。 本仓现有的 `mise run harness-maintain-checks` 同时执行报告和编译目录的维护。
