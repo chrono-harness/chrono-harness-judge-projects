@@ -64,6 +64,27 @@
       }
     },
     {
+      "path": ".chrono-harness/ci/host_adapters.rs",
+      "owner": "host",
+      "surface": "test",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.deployed-host"
+          }
+        ]
+      }
+    },
+    {
       "path": ".chrono-harness/ci/install.sh",
       "owner": "host",
       "surface": "product",
@@ -117,10 +138,35 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.deployed-host"
+          }
+        ]
+      }
     },
     {
       "path": ".chrono-harness/judges.json",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
+    },
+    {
+      "path": ".chrono-harness/maintain-checks.json",
       "owner": "host",
       "surface": "product",
       "cost": "unmeasured",
@@ -164,6 +210,22 @@
       }
     },
     {
+      "path": ".chrono-harness/retention.json",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
+    },
+    {
       "path": ".chrono-harness/rules.json",
       "owner": "host",
       "surface": "product",
@@ -185,7 +247,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".chrono-harness/workflow.json",
@@ -229,7 +295,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".config/mise/conf.d/chrono-harness.toml",
@@ -241,7 +311,16 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.deployed-host"
+          }
+        ]
+      }
     },
     {
       "path": ".config/mise/conf.d/selected-chrono-harness.toml",
@@ -253,21 +332,72 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.deployed-host"
+          }
+        ]
+      }
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/bug.yml",
+      "owner": "host",
+      "surface": "documentation",
+      "cost": "unmeasured",
+      "edges": []
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/documentation.yml",
+      "owner": "host",
+      "surface": "documentation",
+      "cost": "unmeasured",
+      "edges": []
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/enhancement.yml",
+      "owner": "host",
+      "surface": "documentation",
+      "cost": "unmeasured",
+      "edges": []
+    },
+    {
+      "path": ".github/ISSUE_TEMPLATE/question.yml",
+      "owner": "host",
+      "surface": "documentation",
+      "cost": "unmeasured",
+      "edges": []
+    },
+    {
+      "path": ".github/PULL_REQUEST_TEMPLATE.md",
+      "owner": "host",
+      "surface": "documentation",
+      "cost": "unmeasured",
+      "edges": []
     },
     {
       "path": ".github/roadmap.cjs",
       "owner": "host",
       "surface": "product",
       "cost": "unmeasured",
-      "edges": []
-    },
-    {
-      "path": ".github/workflows/issue-roadmap.yml",
-      "owner": "host",
-      "surface": "product",
-      "cost": "unmeasured",
-      "edges": []
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.deployed-host"
+          }
+        ]
+      }
     },
     {
       "path": ".github/workflows/check.yml",
@@ -280,6 +410,27 @@
           "to": "test:judge-projects-tests"
         }
       ]
+    },
+    {
+      "path": ".github/workflows/issue-roadmap.yml",
+      "owner": "host",
+      "surface": "product",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": ".chrono-harness/ci/host_adapters.rs",
+            "operation": "verify.deployed-host"
+          }
+        ]
+      }
     },
     {
       "path": ".github/workflows/release.yml",
@@ -375,7 +526,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-projects-tests/Cargo.toml",
@@ -387,7 +542,32 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
+    },
+    {
+      "path": "crates/judge-projects-tests/examples/release_observation.rs",
+      "owner": "judge-projects-tests",
+      "surface": "test",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects-tests/tests/evidence_query.rs",
@@ -550,27 +730,6 @@
           {
             "path": "crates/judge-projects-tests/tests/verified_languages.rs",
             "operation": "verify.project-languages-tests"
-          }
-        ]
-      }
-    },
-    {
-      "path": "crates/judge-projects-tests/examples/release_observation.rs",
-      "owner": "judge-projects-tests",
-      "surface": "test",
-      "cost": "unmeasured",
-      "edges": [
-        {
-          "kind": "test-execution",
-          "to": "test:judge-projects-tests"
-        }
-      ],
-      "verification": {
-        "role": "program",
-        "roots": [
-          {
-            "path": "crates/judge-projects-tests/tests/verified_state.rs",
-            "operation": "verify.project-state-tests"
           }
         ]
       }
@@ -918,73 +1077,6 @@
           "to": "test:judge-projects-tests"
         }
       ]
-    },
-    {
-      "path": ".github/ISSUE_TEMPLATE/bug.yml",
-      "owner": "host",
-      "surface": "documentation",
-      "cost": "unmeasured",
-      "edges": []
-    },
-    {
-      "path": ".github/ISSUE_TEMPLATE/documentation.yml",
-      "owner": "host",
-      "surface": "documentation",
-      "cost": "unmeasured",
-      "edges": []
-    },
-    {
-      "path": ".github/ISSUE_TEMPLATE/enhancement.yml",
-      "owner": "host",
-      "surface": "documentation",
-      "cost": "unmeasured",
-      "edges": []
-    },
-    {
-      "path": ".github/ISSUE_TEMPLATE/question.yml",
-      "owner": "host",
-      "surface": "documentation",
-      "cost": "unmeasured",
-      "edges": []
-    },
-    {
-      "path": ".github/PULL_REQUEST_TEMPLATE.md",
-      "owner": "host",
-      "surface": "documentation",
-      "cost": "unmeasured",
-      "edges": []
-    },
-    {
-      "path": ".chrono-harness/maintain-checks.json",
-      "owner": "host",
-      "surface": "product",
-      "cost": "unmeasured",
-      "edges": [
-        {
-          "kind": "test-execution",
-          "to": "test:judge-projects-tests"
-        }
-      ],
-      "verification": {
-        "role": "data",
-        "roots": []
-      }
-    },
-    {
-      "path": ".chrono-harness/retention.json",
-      "owner": "host",
-      "surface": "product",
-      "cost": "unmeasured",
-      "edges": [
-        {
-          "kind": "test-execution",
-          "to": "test:judge-projects-tests"
-        }
-      ],
-      "verification": {
-        "role": "data",
-        "roots": []
-      }
     }
   ],
   "project_edges": [],
@@ -1010,6 +1102,7 @@
         "verify.project-state",
         "verify.project-languages-tests",
         "verify.project-state-tests",
+        "verify.deployed-host",
         "projects.owner-check"
       ],
       "timeout_seconds": 600,
