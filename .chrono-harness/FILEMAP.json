@@ -1,5 +1,6 @@
 {
   "schema_version": 2,
+  "require_new_file_classification": true,
   "status": "proposed",
   "files": [
     {
@@ -40,7 +41,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".chrono-harness/ci/check.json",
@@ -306,7 +311,11 @@
       "surface": "product",
       "cost": "unmeasured",
       "edges": [],
-      "symlink": "CLAUDE.md"
+      "symlink": "CLAUDE.md",
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "CLAUDE.md",
@@ -318,7 +327,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "README.md",
@@ -330,7 +343,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "check.sh",
@@ -843,7 +860,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "docs/licenses/trureturing-Apache-2.0.txt",
@@ -855,7 +876,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "rust-toolchain.toml",
