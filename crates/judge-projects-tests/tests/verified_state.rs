@@ -35,6 +35,33 @@ fn release_accepts_the_expected_observations_only() {
 }
 
 
+#[cfg(verus_keep_ghost)]
+fn compiler_observation_keeps_the_method_and_the_runner_result(
+    c: &state::compiler::OutputContract, argv: &[String], failure: &String, limit: usize,
+) {
+    use state::compiler::{Observation, observe_method};
+    let ordinary = observe_method(None, argv, -1, Some(failure), limit, 41u8,
+        |_name: &'static str, _r: Observation| -> (out: Result<u8, i32>)
+            requires false, { Err(-1) });
+    assert(ordinary == Ok::<u8,i32>(41));
+
+    let ok = observe_method(Some(c), argv, 0, None, limit, 41u8,
+        |name: &'static str, r: Observation| -> (out: Result<u8, i32>)
+            requires name@ == "compiler-output-v1"@ && r.operation@ == "observe"@
+                && r.contract == c && r.argv == argv && r.exit == 0
+                && !r.process_failed && r.limit == limit,
+            ensures out == Ok::<u8,i32>(12), { Ok(12) });
+    assert(ok == Ok::<u8,i32>(12));
+
+    let failed = observe_method(Some(c), argv, -9, Some(failure), limit, 41u8,
+        |name: &'static str, r: Observation| -> (out: Result<u8, i32>)
+            requires name@ == "compiler-output-v1"@ && r.operation@ == "observe"@
+                && r.contract == c && r.argv == argv && r.exit == -9
+                && r.process_failed && r.limit == limit,
+            ensures out == Err::<u8,i32>((-77) as i32), { Err(-77) });
+    assert(failed == Err::<u8,i32>((-77) as i32));
+}
+
 fn observed_reply(value: u8, diagnostic: Option<String>) -> (out: Result<(), String>)
     ensures match diagnostic {
         Some(original) => out == Err::<(), String>(original),

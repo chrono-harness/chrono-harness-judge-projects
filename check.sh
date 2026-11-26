@@ -41,5 +41,5 @@ metadata=$(jq -ers --arg manifest "$(pwd -P)/$product" '
 filename=${metadata##*/}
 stem=${filename#lib}
 stem=${metadata%/*}/${stem%.rmeta}
-chrono-host-bootstrap check-compiler-sources native "$stem" src/lib.rs src/evidence_query.rs src/verified_languages.rs src/pair_checks.rs src/verified_state.rs src/state.rs src/routes.rs ||
+chrono-host-bootstrap check-compiler-sources native "$stem" src/lib.rs src/evidence_query.rs src/verified_languages.rs src/pair_checks.rs src/verified_state.rs src/state.rs src/compiler.rs src/routes.rs ||
   coverage_failure "native library differs from required sources"
