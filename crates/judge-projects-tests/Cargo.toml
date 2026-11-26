@@ -33,6 +33,7 @@ name = "plan_trace"
 path = "tests/plan_trace.rs"
 
 [dev-dependencies]
+serde_yaml = { package = "serde_yaml_ng", version = "=0.10.0" }
 toml = { version = "1.2", default-features = false, features = ["parse", "serde", "std"] }
 sha2 = "0.11"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
