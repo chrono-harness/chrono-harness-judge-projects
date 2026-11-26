@@ -95,7 +95,7 @@ use std::{
 
 #[cfg(not(verus_keep_ghost))]
 pub fn sha256(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    hex::encode(Sha256::digest(bytes))
 }
 #[cfg(not(verus_keep_ghost))]
 pub fn digest<T: Serialize>(value: &T) -> Result<String, String> {
@@ -338,9 +338,9 @@ pub(crate) fn file_identity(path: &Path) -> Result<(String, u64), String> {
     if !file.metadata().map_err(error)?.is_file() {
         return Err(invalid());
     }
-    let mut digest = Sha256::new();
+    let mut digest = digest_io::IoWrapper(Sha256::new());
     let length = std::io::copy(&mut file, &mut digest).map_err(error)?;
-    Ok((format!("{:x}", digest.finalize()), length))
+    Ok((hex::encode(digest.0.finalize()), length))
 }
 
 #[cfg(not(verus_keep_ghost))]
