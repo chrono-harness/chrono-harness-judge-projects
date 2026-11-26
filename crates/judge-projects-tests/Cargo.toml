@@ -33,6 +33,12 @@ name = "plan_trace"
 path = "tests/plan_trace.rs"
 
 [dev-dependencies]
+toml = { version = "0.9", default-features = false, features = ["parse", "serde", "std"] }
+sha2 = "0.10"
 tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0.3", default-features = false, features = ["registry", "std"] }
 tracing-tunnel = { version = "0.1.0", default-features = false, features = ["std"] }
+
+[[test]]
+name = "deployed_host"
+path = "../../.chrono-harness/ci/host_adapters.rs"
