@@ -8,6 +8,10 @@ use vstd::prelude::verus;
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
+#[path = "compiler.rs"]
+pub mod compiler;
+
+#[cfg(verus_keep_ghost)]
 #[path = "state.rs"]
 pub mod operation_io;
 

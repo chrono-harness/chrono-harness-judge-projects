@@ -765,7 +765,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-projects/Cargo.toml",
@@ -777,7 +781,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": "crates/judge-projects/src/commands.rs",
@@ -801,7 +809,20 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects/src/verified_state.rs",
+            "operation": "verify.project-state"
+          },
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects/src/evidence_query.rs",
