@@ -10,6 +10,15 @@ use vstd::prelude::*;
 #[cfg(verus_keep_ghost)]
 #[path = "compiler.rs"]
 pub mod compiler;
+#[cfg(verus_keep_ghost)]
+#[path = "routes.rs"]
+pub mod operation_claims;
+#[cfg(verus_keep_ghost)]
+#[path = "wire.rs"]
+pub mod path_components;
+#[cfg(verus_keep_ghost)]
+#[path = "lib.rs"]
+pub mod project_dispatch;
 
 #[cfg(verus_keep_ghost)]
 #[path = "state.rs"]

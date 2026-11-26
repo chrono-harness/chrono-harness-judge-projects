@@ -62,6 +62,59 @@ fn compiler_observation_keeps_the_method_and_the_runner_result(
     assert(failed == Err::<u8,i32>((-77) as i32));
 }
 
+#[cfg(verus_keep_ghost)]
+fn ancestor_runs_in_either_direction<'a, 'b, A: state::path_components::Components<'a>, B: state::path_components::Components<'b>>(first: A, second: B)
+    requires first.rest().len() < second.rest().len(), first.rest() == second.rest().take(first.rest().len() as int),
+{
+    let nested = state::path_components::component_overlap(second, first);
+    assert(nested);
+}
+
+#[cfg(verus_keep_ghost)]
+fn sibling_components_do_not_conflict<'a, 'b, A: state::path_components::Components<'a>, B: state::path_components::Components<'b>>(first: A, second: B, different: usize)
+    requires different < first.rest().len(), different < second.rest().len(),
+        first.rest()[different as int] != second.rest()[different as int],
+{
+    let nested = state::path_components::component_overlap(first, second);
+    assert(!nested);
+}
+
+#[cfg(verus_keep_ghost)]
+fn nonfirst_output_pair_holds_worker<M: state::operation_claims::Conflict>(
+    left: &state::operation_claims::Claims, right: &state::operation_claims::Claims, paths: &M,
+    i: usize, j: usize,
+)
+    requires i < left.outputs.len(), j < right.outputs.len(),
+        paths.related(&left.outputs@[i as int], &right.outputs@[j as int]),
+{
+    let held = left.overlaps(right, paths);
+    assert(held);
+    let ready = state::project_dispatch::can_dispatch(1,2,|| -> (v: bool) ensures !v { false },|| -> (v: bool) ensures v == held { held });
+    assert(!ready);
+}
+#[cfg(verus_keep_ghost)]
+fn collection_preserves_known_paths_on_rejection<M: state::operation_claims::Conflict>(
+    mut known: std::collections::BTreeSet<String>, retained: &String, new_report: &String, paths: &M,
+)
+    requires vstd::laws_cmp::obeys_cmp::<String>(), known@.contains(*retained),
+        paths.related(retained, new_report),
+{
+    let ghost initial = known@;
+    let accepted = state::operation_claims::reserve_report(&mut known,new_report,paths);
+    assert(!accepted && known@ == initial);
+}
+#[cfg(verus_keep_ghost)]
+fn collection_adds_a_disjoint_report<M: state::operation_claims::Conflict>(
+    mut known: std::collections::BTreeSet<String>, new_report: &String, paths: &M,
+)
+    requires vstd::laws_cmp::obeys_cmp::<String>(), !known@.contains(*new_report),
+        forall|p:String| known@.contains(p) ==> !#[trigger] paths.related(&p,new_report),
+{
+    let ghost initial = known@;
+    let accepted = state::operation_claims::reserve_report(&mut known,new_report,paths);
+    assert(accepted && known@ == initial.insert(*new_report));
+}
+
 fn observed_reply(value: u8, diagnostic: Option<String>) -> (out: Result<(), String>)
     ensures match diagnostic {
         Some(original) => out == Err::<(), String>(original),
