@@ -19,7 +19,21 @@ use vstd::contrib::exec_spec::ExecSpecEq;
 #[path = "proof_support/judge-routes/support/tool.rs"]
 mod compiler_fixture;
 
+#[path = "../examples/release_observation.rs"]
+mod release_observation;
+
 verus! {
+
+#[cfg_attr(not(verus_keep_ghost), test)]
+fn release_accepts_the_expected_observations_only() {
+    let accepted = release_observation::accepts(2, 4);
+    assert(accepted);
+    let refused_1 = release_observation::accepts(0, 4);
+    assert(!refused_1);
+    let refused_2 = release_observation::accepts(2, 0);
+    assert(!refused_2);
+}
+
 
 fn observed_reply(value: u8, diagnostic: Option<String>) -> (out: Result<(), String>)
     ensures match diagnostic {
