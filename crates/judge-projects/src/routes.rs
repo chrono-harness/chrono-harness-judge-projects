@@ -1,14 +1,125 @@
 //! The executor consumes a checked plan and retains the original business-process receipt.
+#![allow(unexpected_cfgs)]
+use vstd::contrib::exec_spec::ExecSpecEq;
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+#[cfg_attr(not(verus_keep_ghost), derive(Clone, Debug, serde::Deserialize, serde::Serialize, PartialEq, Eq))]
+#[cfg_attr(not(verus_keep_ghost), serde(deny_unknown_fields))]
+pub struct Claims {
+    pub(crate) resources: Vec<String>,
+    pub(crate) outputs: Vec<String>,
+}
+
+/// Compare complete resource names or the path-components supplied by the native path parser.
+pub trait Conflict {
+    spec fn related(&self, a: &String, b: &String) -> bool;
+    fn conflicts(&self, a: &String, b: &String) -> (same: bool)
+        ensures same == self.related(a,b);
+}
+pub struct Resource;
+impl Conflict for Resource {
+    open spec fn related(&self, a: &String, b: &String) -> bool { a@ == b@ }
+    fn conflicts(&self, a: &String, b: &String) -> (same: bool) {
+        <&str>::exec_eq(a.as_str(), b.as_str())
+    }
+}
+pub open spec fn any_pair<M: Conflict>(a: Seq<String>, b: Seq<String>, cmp: &M) -> bool {
+    exists|i:int,j:int| 0 <= i < a.len() && 0 <= j < b.len() && #[trigger] cmp.related(&a[i], &b[j])
+}
+fn pairs<M: Conflict>(a: &[String], b: &[String], cmp: &M) -> (found: bool)
+    ensures found == any_pair(a@,b@,cmp),
+{
+    let mut i = 0;
+    while i < a.len()
+        invariant i <= a.len(), forall|k:int,l:int| 0 <= k < i && 0 <= l < b.len() ==>
+            !#[trigger] cmp.related(&a@[k], &b@[l]),
+        decreases a.len() - i,
+    {
+        let mut j = 0;
+        while j < b.len()
+            invariant i < a.len(), j <= b.len(),
+                forall|l:int| 0 <= l < j ==> !#[trigger] cmp.related(&a@[i as int], &b@[l]),
+            decreases b.len() - j,
+        {
+            if cmp.conflicts(&a[i], &b[j]) {
+                assert(any_pair(a@,b@,cmp));
+                return true;
+            }
+            j += 1;
+        }
+        i += 1;
+    }
+    false
+}
+/// Reserve a report location before its reader opens the file. A rejected
+/// location leaves the manifest, result and all previously admitted paths intact.
+pub(crate) fn reserve_report<M: Conflict>(
+    known: &mut std::collections::BTreeSet<String>, candidate: &String, cmp: &M,
+) -> (accepted: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures accepted == (!old(known)@.contains(*candidate) && forall|p:String| old(known)@.contains(p)
+        ==> !#[trigger] cmp.related(&p,candidate)),
+        known@ == if accepted { old(known)@.insert(*candidate) } else { old(known)@ },
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut entries = known.iter();
+    loop
+        invariant vstd::laws_cmp::obeys_cmp::<String>(), entries@.1.to_set() == old(known)@, known@ == old(known)@,
+            0 <= entries@.0 <= entries@.1.len(),
+            forall|j:int| 0 <= j < entries@.0 ==> !#[trigger] cmp.related(&entries@.1[j],candidate),
+        decreases entries@.1.len() - entries@.0,
+    {
+        let Some(path) = entries.next() else {
+            assert forall|p:String| old(known)@.contains(p) implies !#[trigger] cmp.related(&p,candidate) by {
+                assert(entries@.1.contains(p));
+                let j = choose|j:int| 0 <= j < entries@.1.len() && entries@.1[j] == p;
+            }
+            return known.insert(candidate.clone());
+        };
+        if cmp.conflicts(path,candidate) {
+            assert(old(known)@.contains(*path));
+            return false;
+        }
+    }
+}
+impl Claims {
+    pub(crate) fn overlaps<M: Conflict>(&self, other: &Self, paths: &M) -> (yes: bool)
+        ensures yes == (any_pair(self.resources@,other.resources@,&Resource)
+            || any_pair(self.outputs@,other.outputs@,paths)),
+    {
+        pairs(&self.resources, &other.resources, &Resource) || pairs(&self.outputs, &other.outputs, paths)
+    }
+}
+}
+#[cfg(not(verus_keep_ghost))]
+pub(crate) struct OutputPaths;
+#[cfg(not(verus_keep_ghost))]
+impl Conflict for OutputPaths {
+    fn conflicts(&self, a: &String, b: &String) -> bool {
+        crate::wire::paths_overlap(a, b)
+    }
+}
+#[cfg(not(verus_keep_ghost))]
 use crate::commands::{self, Spec};
+#[cfg(not(verus_keep_ghost))]
 use crate::registration::Registry;
+#[cfg(not(verus_keep_ghost))]
 use crate::wire::{Tool, file_identity, resolve_program};
+#[cfg(not(verus_keep_ghost))]
 use serde::{Deserialize, Serialize};
+#[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
+#[cfg(not(verus_keep_ghost))]
 use std::{
     collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Method {
@@ -20,6 +131,7 @@ pub struct Method {
     pub output_contract: Option<crate::compiler::OutputContract>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bounds {
@@ -27,6 +139,7 @@ pub struct Bounds {
     pub output_limit_bytes: usize,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Plan {
@@ -37,13 +150,7 @@ pub struct Plan {
     pub operation_bounds: BTreeMap<String, Bounds>,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(deny_unknown_fields)]
-pub struct Claims {
-    resources: Vec<String>,
-    outputs: Vec<String>,
-}
-
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(deny_unknown_fields)]
 pub struct Scheduling {
@@ -53,20 +160,7 @@ pub struct Scheduling {
     pub resources: Vec<String>,
     pub claims: BTreeMap<String, Claims>,
 }
-impl Claims {
-    pub(super) fn overlaps(&self, other: &Self) -> bool {
-        self.resources
-            .iter()
-            .any(|resource| other.resources.contains(resource))
-            || self.outputs.iter().any(|path| {
-                other
-                    .outputs
-                    .iter()
-                    .any(|other| crate::wire::paths_overlap(path, other))
-            })
-    }
-}
-
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Execution {
@@ -82,6 +176,7 @@ pub struct Execution {
     pub scheduling: Option<Scheduling>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Operation {
@@ -91,6 +186,7 @@ pub struct Operation {
     pub output_limit_bytes: usize,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct Dispatch {
@@ -98,6 +194,7 @@ pub(super) struct Dispatch {
     pub order: Vec<usize>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 impl Dispatch {
     fn admit(&self, count: usize) -> Result<(), String> {
         crate::verified_state::admit_dispatch_order(&self.order, count).map_err(String::from)
@@ -106,6 +203,7 @@ impl Dispatch {
 
 /// Resolve the host's installed routes command in the current declaration checkout.
 /// A transported plan can refer to a different original working directory.
+#[cfg(not(verus_keep_ghost))]
 pub struct Routes<'a> {
     root: &'a Path,
     runner: PathBuf,
@@ -115,6 +213,7 @@ pub struct Routes<'a> {
     timeout_seconds: u64,
     output_limit_bytes: usize,
 }
+#[cfg(not(verus_keep_ghost))]
 impl<'a> Routes<'a> {
     pub fn new(root: &'a Path, registry: &Registry, environment: &Value) -> Result<Self, String> {
         let name = "chrono-judge-routes";

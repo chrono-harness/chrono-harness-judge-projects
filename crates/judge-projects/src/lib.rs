@@ -1,35 +1,84 @@
 //! Pair admissibility and actual operation/test evidence. Selection remains FILEMAP-owned.
+#![allow(unexpected_cfgs)]
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+/// Apply the scheduler's capacity, prerequisite and live-claim observations.
+pub(crate) fn can_dispatch<W: FnOnce() -> bool, C: FnOnce() -> bool>(
+    running: usize, limit: usize, waiting: W, conflict: C,
+) -> (ready: bool)
+    requires running < limit ==> waiting.requires(()),
+        running < limit && waiting.ensures((), false) ==> conflict.requires(()),
+    ensures running >= limit ==> !ready,
+        running < limit ==> (
+            (waiting.ensures((), true) && !ready)
+            || (waiting.ensures((), false) && conflict.ensures((), !ready))),
+{
+    running < limit && !waiting() && !conflict()
+}
+}
+#[cfg(not(verus_keep_ghost))]
 mod commands;
+#[cfg(not(verus_keep_ghost))]
 mod compiler;
+#[cfg(not(verus_keep_ghost))]
 pub mod evidence_query;
+#[cfg(not(verus_keep_ghost))]
 pub mod execute_query;
+#[cfg(not(verus_keep_ghost))]
 mod git_reader;
+#[cfg(not(verus_keep_ghost))]
 mod impact;
+#[cfg(not(verus_keep_ghost))]
 pub use impact::decode as decode_impact;
+#[cfg(not(verus_keep_ghost))]
 mod pair_checks;
+#[cfg(not(verus_keep_ghost))]
 pub mod plan_trace;
+#[cfg(not(verus_keep_ghost))]
 mod receipt;
+#[cfg(not(verus_keep_ghost))]
 mod routes;
+#[cfg(not(verus_keep_ghost))]
 mod runtime_session;
+#[cfg(not(verus_keep_ghost))]
 mod state;
+#[cfg(not(verus_keep_ghost))]
 mod verified_languages;
+#[cfg(not(verus_keep_ghost))]
 mod verified_state;
+#[cfg(not(verus_keep_ghost))]
 pub use verified_state::query_exit;
+#[cfg(not(verus_keep_ghost))]
 pub mod wire;
+#[cfg(not(verus_keep_ghost))]
 use commands::Spec as CommandSpec;
+#[cfg(not(verus_keep_ghost))]
 use wire::{Finding, Request, Response, Status};
+#[cfg(not(verus_keep_ghost))]
 mod registration;
+#[cfg(not(verus_keep_ghost))]
 pub use receipt::Receipt;
+#[cfg(not(verus_keep_ghost))]
 use registration::Registry;
+#[cfg(not(verus_keep_ghost))]
 use routes::{Dispatch, Execution, Routes};
+#[cfg(not(verus_keep_ghost))]
 use serde::{Deserialize, Serialize};
+#[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
+#[cfg(not(verus_keep_ghost))]
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::Path,
 };
+#[cfg(not(verus_keep_ghost))]
 pub type OperationResult = verified_state::OperationRow<Receipt, Value>;
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Results {
     pub plan: String,
@@ -46,6 +95,7 @@ pub struct Results {
     pub operation_state: Option<Value>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CollectedCompletion {
     pub schema: String,
@@ -60,6 +110,7 @@ pub struct CollectedCompletion {
     pub tools: Value,
     pub warnings: Vec<Value>,
 }
+#[cfg(not(verus_keep_ghost))]
 impl Results {
     pub fn has_errors(&self) -> bool {
         verified_state::has_execution_error(&self.executed)
@@ -74,6 +125,7 @@ impl Results {
     }
 }
 /// Execute a plan admitted by the installed routes judge.
+#[cfg(not(verus_keep_ghost))]
 fn execute(
     plan: &Execution,
     routes: &Routes,
@@ -137,15 +189,21 @@ fn execute(
                     progressed = true;
                     continue;
                 }
-                if running.len() >= dispatch.max_running.get()
-                    || op.predecessors.iter().any(|id| !statuses.contains_key(id))
-                    || plan.scheduling.as_ref().is_some_and(|policy| {
-                        running.iter().any(|i: &usize| {
-                            policy.claims[&op.method.operation]
-                                .overlaps(&policy.claims[&plan.operations[*i].method.operation])
+                if !can_dispatch(
+                    running.len(),
+                    dispatch.max_running.get(),
+                    || op.predecessors.iter().any(|id| !statuses.contains_key(id)),
+                    || {
+                        plan.scheduling.as_ref().is_some_and(|policy| {
+                            running.iter().any(|i: &usize| {
+                                policy.claims[&op.method.operation].overlaps(
+                                    &policy.claims[&plan.operations[*i].method.operation],
+                                    &routes::OutputPaths,
+                                )
+                            })
                         })
-                    })
-                {
+                    },
+                ) {
                     continue;
                 }
                 pending.remove(&index);
@@ -255,6 +313,7 @@ fn execute(
     Ok(results)
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn reported_coverage_cause(bytes: &[u8], complete: bool) -> Option<&str> {
     bytes.split(|&byte| byte == b'\n').find_map(|line| {
         let line = std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok()?;
@@ -266,6 +325,7 @@ fn reported_coverage_cause(bytes: &[u8], complete: bool) -> Option<&str> {
     })
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn execute_operation(
     plan: &Execution,
     index: usize,
@@ -343,6 +403,7 @@ fn execute_operation(
     row
 }
 /// Validate the caller's affected pairs in a fixed project registry.
+#[cfg(not(verus_keep_ghost))]
 pub fn check_pairs(input: impl std::io::Read) -> Result<(), String> {
     check_pairs_with(input, |registry| {
         let root = std::env::current_dir().map_err(|e| e.to_string())?;
@@ -350,6 +411,7 @@ pub fn check_pairs(input: impl std::io::Read) -> Result<(), String> {
     })
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub fn check_pairs_with(
     input: impl std::io::Read,
     validate: impl FnOnce(&Value) -> Result<(), String>,
@@ -378,6 +440,7 @@ pub fn check_pairs_with(
     Ok(())
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn pairs(root: &Path, r: &Registry, affected: &BTreeSet<String>) -> Result<(), String> {
     let mut tests_for_owner: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for (test, rows) in &r.bindings {
@@ -401,6 +464,7 @@ fn pairs(root: &Path, r: &Registry, affected: &BTreeSet<String>) -> Result<(), S
         &tests_for_owner,
     )
 }
+#[cfg(not(verus_keep_ghost))]
 fn snapshot_with_reader(
     candidate: &str,
     artifacts: &[String],
@@ -423,6 +487,7 @@ fn snapshot_with_reader(
     Ok(())
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn check_selected_coverage(
     selected: &[String],
     results: &BTreeMap<String, String>,
@@ -439,6 +504,7 @@ fn check_selected_coverage(
 /// operation.  The collector consumes the original sealed request and judge
 /// observations retained by each unit; it never reconstructs or replays a
 /// process locally.
+#[cfg(not(verus_keep_ghost))]
 fn collect_reports(
     req: &Request,
     plan: &Execution,
@@ -518,11 +584,7 @@ fn collect_reports(
                 input.unit
             ));
         }
-        if paths
-            .iter()
-            .any(|existing| crate::wire::paths_overlap(existing, &input.path))
-            || !paths.insert(input.path.clone())
-        {
+        if !routes::reserve_report(&mut paths, &input.path, &routes::OutputPaths) {
             return Err("E_COLLECTION_INPUT: report path collision/overlap".into());
         }
         let report_bytes = report_bytes(&mut originals, &input.path, None, report_limit)
@@ -742,6 +804,7 @@ fn collect_reports(
 /// current declaration view.  Paths and run identities remain at their
 /// original coordinates; only typed endpoint and declaration projections are
 /// compared with the current collection request.
+#[cfg(not(verus_keep_ghost))]
 fn validate_unit_report(
     originals: &mut runtime_session::Session,
     reader: &mut runtime_session::Session,
@@ -1127,6 +1190,7 @@ fn validate_unit_report(
     Ok(results)
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn artifact_text(
     originals: &mut runtime_session::Session,
     path: &str,
@@ -1140,6 +1204,7 @@ fn artifact_text(
         .map(String::into_bytes)
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn report_bytes(
     originals: &mut runtime_session::Session,
     path: &str,
@@ -1158,6 +1223,7 @@ fn report_bytes(
 
 /// Validate the transported original context and declared input closure for
 /// both contributions and their finalized collector proof.
+#[cfg(not(verus_keep_ghost))]
 fn validate_retained_request_at(
     originals: &mut runtime_session::Session,
     req: &Request,
@@ -1207,6 +1273,7 @@ fn validate_retained_request_at(
         json!({"mode":"retained","artifacts":artifacts,"transport":transport}),
     )
 }
+#[cfg(not(verus_keep_ghost))]
 fn validate_original_entry(
     reader: &mut runtime_session::Session,
     req: &Request,
@@ -1241,6 +1308,7 @@ fn validate_original_entry(
     }
     Ok(())
 }
+#[cfg(not(verus_keep_ghost))]
 fn validate_declared_tools(
     originals: &mut runtime_session::Session,
     plan: &Execution,
@@ -1313,6 +1381,7 @@ fn validate_declared_tools(
     }
     Ok(())
 }
+#[cfg(not(verus_keep_ghost))]
 fn unit_tools(report: &Value) -> Result<Value, String> {
     let route = report["judges"]
         .as_array()
@@ -1335,6 +1404,7 @@ fn unit_tools(report: &Value) -> Result<Value, String> {
     Ok(Value::Object(tools))
 }
 /// Revalidate the original source closure for every complete consumer, without historical execution.
+#[cfg(not(verus_keep_ghost))]
 fn verify_completion(
     originals: &mut runtime_session::Session,
     req: &Request,
@@ -1541,6 +1611,7 @@ fn verify_completion(
     Ok(())
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn validate_retained_response(req: &Request, response: &Response) -> Result<(), String> {
     for finding in &response.findings {
         if finding.code.is_empty()
@@ -1574,6 +1645,7 @@ fn validate_retained_response(req: &Request, response: &Response) -> Result<(), 
     Ok(())
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub fn host_runner(root: &Path) -> Result<std::path::PathBuf, String> {
     let config = registration::host_config(root)?;
     crate::wire::resolve_program(
@@ -1585,6 +1657,7 @@ pub fn host_runner(root: &Path) -> Result<std::path::PathBuf, String> {
     )
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub fn evaluate_original(
     input: impl std::io::Read,
     mut output: impl std::io::Write,
@@ -1614,6 +1687,7 @@ pub fn evaluate_original(
     output.flush().map_err(|e| e.to_string())
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub fn judge(req: &Request) -> Response {
     let mut response = req.response(Status::Pass);
     let mut observations = registration::Observations::default();
@@ -1651,6 +1725,7 @@ pub fn judge(req: &Request) -> Response {
 }
 /// Check only helper operations explicitly assigned assertion responsibility for a selected test.
 /// The checked execution plan and the retained direct process identify what actually ran.
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn assertion_helpers(
     projects: &Value,
     plan: &crate::routes::Execution,
@@ -1741,6 +1816,7 @@ pub(crate) fn assertion_helpers(
     Ok(evidence)
 }
 
+#[cfg(not(verus_keep_ghost))]
 fn evaluate(
     req: &Request,
     response: &mut Response,
