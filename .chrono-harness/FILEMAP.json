@@ -291,7 +291,11 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "data",
+        "roots": []
+      }
     },
     {
       "path": ".gitignore",
@@ -546,6 +550,27 @@
           {
             "path": "crates/judge-projects-tests/tests/verified_languages.rs",
             "operation": "verify.project-languages-tests"
+          }
+        ]
+      }
+    },
+    {
+      "path": "crates/judge-projects-tests/examples/release_observation.rs",
+      "owner": "judge-projects-tests",
+      "surface": "test",
+      "cost": "unmeasured",
+      "edges": [
+        {
+          "kind": "test-execution",
+          "to": "test:judge-projects-tests"
+        }
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
           }
         ]
       }
