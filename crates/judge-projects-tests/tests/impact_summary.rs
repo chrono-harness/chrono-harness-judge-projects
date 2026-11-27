@@ -27,6 +27,11 @@ fn the_installed_decoder_receives_the_whole_impact_and_returns_affected_and_reti
             Ok((2, Vec::new(), b"invalid edge kind\n".to_vec())),
             "invalid edge kind",
         ),
+        (
+            Ok((3, b"ignored".to_vec(), b"\n".to_vec())),
+            "FILEMAP impact-summary exited with 3",
+        ),
+        (Ok((3, Vec::new(), vec![0xff])), "invalid utf-8 sequence"),
         (Err("process timeout".to_owned()), "process timeout"),
         (
             Ok((0, b"{}".to_vec(), Vec::new())),

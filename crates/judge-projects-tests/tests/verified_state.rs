@@ -30,6 +30,22 @@ mod release_observation;
 verus! {
 
 #[cfg(verus_keep_ghost)]
+fn streams_cover_only_the_announced_bytes(stdout: usize, stderr: usize, actual: usize,
+    code: i32, output: &[u8], diagnostic: &[u8]) {
+    let bound = state::commands::stream_boundary(stdout, stderr, actual);
+    if stdout > actual || stderr as int != actual as int - stdout as int { assert(bound.is_none()); }
+    else { assert(bound == Some(stdout)); }
+    let empty = state::commands::stream_boundary(0, 0, 0);
+    assert(empty == Some(0usize));
+    let overflow = state::commands::stream_boundary(usize::MAX, 1, 0);
+    assert(overflow.is_none());
+    let reply = state::impact::reply_stream(code, output, diagnostic);
+    if code == 0 { assert(reply == Ok::<&[u8], &[u8]>(output)); }
+    else { assert(reply == Err::<&[u8], &[u8]>(diagnostic)); }
+}
+
+
+#[cfg(verus_keep_ghost)]
 fn receipt_preserves_each_wide_timeout() {
     let absent = state::receipt_timeout::exact_observation_timeout(None);
     let small = state::receipt_timeout::exact_observation_timeout(Some(9007199254740991));
