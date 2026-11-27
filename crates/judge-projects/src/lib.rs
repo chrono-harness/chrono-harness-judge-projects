@@ -116,7 +116,7 @@ impl Results {
         verified_state::has_execution_error(&self.executed)
     }
     pub fn passed(&self) -> bool {
-        verified_state::report_passed(
+        evidence_query::report_passed(
             &self.executed,
             self.blocked.len(),
             &self.selected,
