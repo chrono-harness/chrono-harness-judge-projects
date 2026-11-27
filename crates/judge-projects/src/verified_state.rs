@@ -24,6 +24,10 @@ pub mod project_dispatch;
 #[path = "state.rs"]
 pub mod operation_io;
 
+#[cfg(verus_keep_ghost)]
+#[path = "receipt.rs"]
+pub mod receipt_timeout;
+
 verus! {
 
 /// Check the two path observations before opening either the host runner or the routes program.

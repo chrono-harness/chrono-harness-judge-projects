@@ -351,6 +351,7 @@ pub struct Tool {
     pub path: PathBuf,
     pub basename: String,
     pub sha256: String,
+    #[serde(serialize_with = "crate::routes::timeout_wire::observation")]
     pub version: ProcessResult,
 }
 
@@ -397,6 +398,7 @@ pub struct ProcessResult {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub child_pid: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(deserialize_with = "crate::routes::timeout_wire::optional::deserialize")]
     pub timeout_seconds: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_limit_bytes: Option<usize>,
