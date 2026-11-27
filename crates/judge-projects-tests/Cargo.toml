@@ -6,7 +6,7 @@ publish = false
 autotests = false
 
 [dependencies]
-vstd = "=0.0.0-2026-04-20-1748"
+vstd = "=0.0.0-2026-11-22-0344"
 chrono-judge-projects = { path = "../judge-projects" }
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
