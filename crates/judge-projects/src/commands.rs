@@ -1,6 +1,25 @@
 //! Invoke bounded host commands through the installed runner's binary stream protocol.
+#![allow(unexpected_cfgs)]
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+/// The announced stream lengths must exhaust the payload at a valid split point.
+pub(crate) fn stream_boundary(stdout: usize, stderr: usize, payload: usize) -> (end: Option<usize>)
+    ensures end == if stdout as int + stderr as int == payload as int { Some(stdout) } else { None },
+        end matches Some(i) ==> i <= payload,
+{
+    if stdout <= payload && stderr == payload - stdout { Some(stdout) } else { None }
+}
+}
+
+#[cfg(not(verus_keep_ghost))]
 use serde::{Deserialize, Serialize};
+#[cfg(not(verus_keep_ghost))]
 use serde_json::json;
+#[cfg(not(verus_keep_ghost))]
 use std::{
     collections::BTreeMap,
     io::Write,
@@ -8,6 +27,7 @@ use std::{
     process::{Command, Stdio},
 };
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Spec {
@@ -20,8 +40,10 @@ pub struct Spec {
     pub output_limit_bytes: usize,
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(crate) type Streams = (i32, Vec<u8>, Vec<u8>);
 
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn invoke(
     root: &Path,
     runner: &Path,
@@ -73,14 +95,14 @@ pub(crate) fn invoke(
     let lengths: Lengths =
         serde_json::from_slice(&reply.stdout[..end]).map_err(|e| e.to_string())?;
     let bytes = &reply.stdout[end + 1..];
-    if lengths.stdout_length.checked_add(lengths.stderr_length) != Some(bytes.len()) {
-        return Err("runner response length mismatch".into());
-    }
-    let (stdout, stderr) = bytes.split_at(lengths.stdout_length);
+    let boundary = stream_boundary(lengths.stdout_length, lengths.stderr_length, bytes.len())
+        .ok_or("runner response length mismatch")?;
+    let (stdout, stderr) = bytes.split_at(boundary);
     Ok((lengths.exit_code, stdout.to_vec(), stderr.to_vec()))
 }
 
 /// Call one installed runner query while retaining the original caller's descriptors and cwd.
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn query<T: serde::de::DeserializeOwned>(
     root: &Path,
     runner: &Path,

@@ -310,17 +310,17 @@ impl<'a> Routes<'a> {
         let bytes = serde_json::to_vec(input).map_err(|e| e.to_string())?;
         let (code, stdout, stderr) =
             commands::invoke(self.root, &self.runner, &spec, Some(&self.digest), &bytes)?;
-        if code != 0 {
-            if stderr.is_empty() {
-                return Err(format!("routes {command} exited {code}"));
+        match crate::impact::reply_stream(code, &stdout, &stderr) {
+            Ok(stdout) => serde_json::from_slice(stdout).map_err(|error| error.to_string()),
+            Err([]) => Err(format!("routes {command} exited {code}")),
+            Err(stderr) => {
+                let diagnostic = std::str::from_utf8(stderr).map_err(|error| error.to_string())?;
+                Err(diagnostic
+                    .strip_suffix('\n')
+                    .unwrap_or(diagnostic)
+                    .to_owned())
             }
-            let diagnostic = String::from_utf8(stderr).map_err(|e| e.to_string())?;
-            return Err(diagnostic
-                .strip_suffix('\n')
-                .unwrap_or(&diagnostic)
-                .to_owned());
         }
-        serde_json::from_slice(&stdout).map_err(|e| e.to_string())
     }
     pub fn check(&self, plan: &Execution) -> Result<(), String> {
         let reply = self.query("check-plan-v1", plan)?;

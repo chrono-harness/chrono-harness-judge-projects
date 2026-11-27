@@ -8,11 +8,17 @@ use vstd::prelude::verus;
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
+#[path = "commands.rs"]
+pub mod commands;
+#[cfg(verus_keep_ghost)]
 #[path = "evidence_query.rs"]
 pub mod evidence_query;
 #[cfg(verus_keep_ghost)]
 #[path = "execute_query.rs"]
 pub mod execute_query;
+#[cfg(verus_keep_ghost)]
+#[path = "impact.rs"]
+pub mod impact;
 #[cfg(verus_keep_ghost)]
 #[path = "plan_trace.rs"]
 pub mod plan_trace;
