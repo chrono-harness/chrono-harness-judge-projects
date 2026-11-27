@@ -24,6 +24,17 @@ mod release_observation;
 
 verus! {
 
+#[cfg(verus_keep_ghost)]
+fn receipt_preserves_each_wide_timeout() {
+    let absent = state::receipt_timeout::exact_observation_timeout(None);
+    let small = state::receipt_timeout::exact_observation_timeout(Some(9007199254740991));
+    let first = state::receipt_timeout::exact_observation_timeout(Some(9007199254740992));
+    let last = state::receipt_timeout::exact_observation_timeout(Some(u64::MAX));
+    assert(absent.is_none() && small.is_none());
+    assert(first == Some(9007199254740992u64) && last == Some(u64::MAX));
+}
+
+
 #[cfg_attr(not(verus_keep_ghost), test)]
 fn release_accepts_the_expected_observations_only() {
     let accepted = release_observation::accepts(2, 4);

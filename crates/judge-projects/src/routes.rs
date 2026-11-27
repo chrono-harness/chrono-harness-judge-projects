@@ -135,6 +135,7 @@ pub struct Method {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Bounds {
+    #[serde(with = "crate::routes::timeout_wire")]
     pub timeout_seconds: u64,
     pub output_limit_bytes: usize,
 }
@@ -144,6 +145,7 @@ pub struct Bounds {
 #[serde(deny_unknown_fields)]
 pub struct Plan {
     pub operations: Vec<String>,
+    #[serde(with = "crate::routes::timeout_wire")]
     pub timeout_seconds: u64,
     pub output_limit_bytes: usize,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -182,6 +184,7 @@ pub struct Execution {
 pub struct Operation {
     pub method: Method,
     pub predecessors: BTreeSet<String>,
+    #[serde(with = "crate::routes::timeout_wire")]
     pub timeout_seconds: u64,
     pub output_limit_bytes: usize,
 }
@@ -394,5 +397,63 @@ impl<'a> Routes<'a> {
             return Err("E_PLAN_IDENTITY: route context differs".into());
         }
         Ok(reply["binding"].clone())
+    }
+}
+
+/// Public execution bounds use JSON numbers in the interoperable range and
+/// canonical decimal strings above it so a v1 JCS transport preserves them.
+#[cfg(not(verus_keep_ghost))]
+pub(crate) mod timeout_wire {
+    use serde::{Deserialize, Deserializer, Serializer, de::Error};
+
+    const SAFE: u64 = (1 << 53) - 1;
+
+    pub fn serialize<S: Serializer>(seconds: &u64, s: S) -> Result<S::Ok, S::Error> {
+        if *seconds <= SAFE {
+            s.serialize_u64(*seconds)
+        } else {
+            s.collect_str(seconds)
+        }
+    }
+
+    pub fn observation<S: Serializer>(
+        process: &crate::wire::ProcessResult,
+        s: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::Serialize;
+        if let Some(seconds) = crate::receipt::exact_observation_timeout(process.timeout_seconds) {
+            let mut value = serde_json::to_value(process).map_err(serde::ser::Error::custom)?;
+            value["timeout_seconds"] = serde_json::Value::String(seconds.to_string());
+            value.serialize(s)
+        } else {
+            process.serialize(s)
+        }
+    }
+
+    pub mod optional {
+        use super::*;
+        #[derive(Deserialize)]
+        struct Wrapped(#[serde(deserialize_with = "super::deserialize")] u64);
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Option<u64>, D::Error> {
+            Ok(Option::<Wrapped>::deserialize(d)?.map(|wrapped| wrapped.0))
+        }
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<u64, D::Error> {
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum Timeout {
+            Number(u64),
+            Decimal(String),
+        }
+        match Timeout::deserialize(d)? {
+            Timeout::Number(value) => Ok(value),
+            Timeout::Decimal(text) => text
+                .parse::<u64>()
+                .ok()
+                .filter(|n| *n > SAFE && n.to_string() == text)
+                .ok_or_else(|| D::Error::custom("invalid exact timeout")),
+        }
     }
 }

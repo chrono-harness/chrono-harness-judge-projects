@@ -121,12 +121,13 @@ fn encoded(
     retained_process: Option<Value>,
 ) -> Result<Value, String> {
     let mut value = serde_json::to_value(row).map_err(|e| e.to_string())?;
-    if row.receipt.is_some() {
+    if let Some(receipt) = &row.receipt {
         value["receipt"]["process"] = match retained_process {
             Some(process) => process,
-            None => original.session.borrow_mut().call(
-                json!({"operation":"compact-process","process":value["receipt"]["process"]}),
-            )?,
+            None => original
+                .session
+                .borrow_mut()
+                .call(json!({"operation":"compact-process","process":receipt.process}))?,
         };
     }
     value["schema"] = json!("chrono-project-operation-result/v1");
