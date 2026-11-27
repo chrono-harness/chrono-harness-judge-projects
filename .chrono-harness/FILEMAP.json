@@ -948,7 +948,20 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects/src/verified_state.rs",
+            "operation": "verify.project-state"
+          },
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects/src/impact.rs",
@@ -1010,7 +1023,20 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects/src/verified_state.rs",
+            "operation": "verify.project-state"
+          },
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects/src/pair_checks.rs",
@@ -1022,7 +1048,20 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects/src/verified_state.rs",
+            "operation": "verify.project-state"
+          },
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects/src/plan_trace.rs",
@@ -1084,7 +1123,20 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects/src/verified_state.rs",
+            "operation": "verify.project-state"
+          },
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects/src/routes.rs",
@@ -1121,7 +1173,20 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects/src/verified_state.rs",
+            "operation": "verify.project-state"
+          },
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects/src/state.rs",
