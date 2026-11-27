@@ -1,20 +1,67 @@
 //! Read registration projections for the executor and replay original declarations.
+#![allow(unexpected_cfgs)]
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+/// Check the response identity, record its Git observation, then consume its registration data.
+pub fn admit_project_view<R, T, O, D>(
+    reply: R, request_matches: bool, commits_match: bool, observe: O, consume: D,
+) -> (out: Result<T, String>)
+    where O: FnOnce(R) -> (R, Result<(), String>), D: FnOnce(R) -> Result<T, String>,
+    requires
+        (request_matches && commits_match) ==> observe.requires((reply,)),
+        forall|next: R, result: Result<(), String>|
+            (request_matches && commits_match && result.is_ok()
+                && #[trigger] observe.ensures((reply,), (next, result))) ==> consume.requires((next,)),
+    ensures if !request_matches || !commits_match {
+        out matches Err(error) && error@ == "E_PROTOCOL: registration project views identity"@
+    } else {
+        exists|next: R, result: Result<(), String>| #[trigger] observe.ensures((reply,), (next, result))
+            && match result { Err(error) => out == Err::<T, String>(error), Ok(()) => consume.ensures((next,), out) }
+    },
+{
+    if !request_matches || !commits_match {
+        return Err("E_PROTOCOL: registration project views identity".to_string());
+    }
+    let (next, result) = observe(reply);
+    assert(observe.ensures((reply,), (next, result)));
+    match result {
+        Err(error) => Err(error),
+        Ok(()) => {
+            assert(consume.requires((next,)));
+            consume(next)
+        }
+    }
+}
+}
+
+#[cfg(not(verus_keep_ghost))]
 use crate::git_reader::Reader;
+#[cfg(not(verus_keep_ghost))]
 use crate::routes::Scheduling;
+#[cfg(not(verus_keep_ghost))]
 use crate::wire::Request;
+#[cfg(not(verus_keep_ghost))]
 use serde::Deserialize;
+#[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
+#[cfg(not(verus_keep_ghost))]
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
 };
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Deserialize)]
 pub(crate) struct Binding {
     pub owner: String,
     pub operation: String,
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Deserialize)]
 pub(crate) struct Registry {
     config_path: String,
@@ -28,8 +75,10 @@ pub(crate) struct Registry {
     view: Value,
 }
 
+#[cfg(not(verus_keep_ghost))]
 const NAME: &str = "chrono-judge-registration";
 
+#[cfg(not(verus_keep_ghost))]
 fn installed(root: &Path, config: &Value) -> Result<PathBuf, String> {
     let tool = config["tools"]
         .as_array()
@@ -45,10 +94,12 @@ fn installed(root: &Path, config: &Value) -> Result<PathBuf, String> {
     crate::wire::resolve_program(root, program, None)
 }
 
+#[cfg(not(verus_keep_ghost))]
 const ENTRY: &str = ".chrono-harness/config.json";
 
 /// Most hosts provide a standard installed runner. An explicitly installed custom path may
 /// itself be supplied by a native platform profile before that runner can read its full policy.
+#[cfg(not(verus_keep_ghost))]
 fn declared_runtime(root: &Path) -> Result<PathBuf, String> {
     fn document(root: &Path, name: &str) -> Result<Value, String> {
         use std::path::Component;
@@ -101,6 +152,7 @@ fn declared_runtime(root: &Path) -> Result<PathBuf, String> {
     crate::wire::resolve_program(root, path, None)
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(super) fn host_config(root: &Path) -> Result<Value, String> {
     if !root.join(ENTRY).try_exists().map_err(|e| e.to_string())? {
         return Ok(Value::Null);
@@ -113,6 +165,7 @@ pub(super) fn host_config(root: &Path) -> Result<Value, String> {
     crate::commands::query(root, &runner, "selected-host-config-v1", &json!(ENTRY))
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
     let config = host_config(root)?;
     let program = installed(root, &config)?;
@@ -124,6 +177,7 @@ pub(super) fn standalone(root: &Path, registry: &Value) -> Result<(), String> {
 
 /// Send JSON and drain the reply concurrently. Native requests can contain relative coordinates;
 /// the caller selects the directory in which the registration query must interpret them.
+#[cfg(not(verus_keep_ghost))]
 fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<Value, String> {
     let program = program.canonicalize().map_err(|err| err.to_string())?;
     let runner = crate::host_runner(root)?;
@@ -136,6 +190,7 @@ fn query(root: &Path, program: &Path, operation: &str, input: &Value) -> Result<
         }),
     )
 }
+#[cfg(not(verus_keep_ghost))]
 impl Registry {
     pub fn runner(&self, root: &Path) -> Result<PathBuf, String> {
         let name = self.config()["runner"]["path"]
@@ -200,11 +255,13 @@ impl Registry {
     }
 }
 
+#[cfg(not(verus_keep_ghost))]
 #[derive(Default)]
 pub(super) struct Observations {
     extra: Option<(usize, Vec<Value>)>,
 }
 
+#[cfg(not(verus_keep_ghost))]
 impl Observations {
     fn record(&mut self, reader: &mut Reader, mut external: Value) -> Result<(), String> {
         let mut original = reader.observation()?;
@@ -237,6 +294,7 @@ impl Observations {
     }
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(super) fn views(
     req: &Request,
     reader: &mut Reader,
@@ -249,26 +307,35 @@ pub(super) fn views(
     let program = installed(root, &candidate.values[&candidate.effective_path])?;
     let request = json!({"request":req,"validate_inputs":validate_inputs,"originals":[base.originals,candidate.originals]});
     let cwd = std::env::current_dir().map_err(|e| e.to_string())?;
-    let mut reply = query(&cwd, &program, "project-views-v1", &request)?;
-    if reply["request_id"] != req.request_id
-        || reply["commits"] != json!([req.base.commit, req.candidate.commit])
-    {
-        return Err("E_PROTOCOL: registration project views identity".into());
-    }
-    if let Some(extra) = reply
-        .as_object_mut()
-        .and_then(|v| v.remove("git_facts"))
-        .filter(|v| !v.is_null())
-    {
-        observations.record(reader, extra)?;
-    }
-    if let Some(error) = reply.get("error") {
-        return Err(error
-            .as_str()
-            .ok_or("invalid project registration error")?
-            .into());
-    }
-    let registry: Registry = serde_json::from_value(reply).map_err(|e| e.to_string())?;
-    registry.validate_documents()?;
-    Ok(registry)
+    let reply = query(&cwd, &program, "project-views-v1", &request)?;
+    let request_matches = reply["request_id"] == req.request_id;
+    let commits_match =
+        request_matches && reply["commits"] == json!([req.base.commit, req.candidate.commit]);
+    admit_project_view(
+        reply,
+        request_matches,
+        commits_match,
+        |mut reply| {
+            let observation = reply
+                .as_object_mut()
+                .and_then(|v| v.remove("git_facts"))
+                .filter(|v| !v.is_null());
+            let result = match observation {
+                Some(extra) => observations.record(reader, extra),
+                None => Ok(()),
+            };
+            (reply, result)
+        },
+        |reply| {
+            if let Some(error) = reply.get("error") {
+                return Err(error
+                    .as_str()
+                    .ok_or("invalid project registration error")?
+                    .into());
+            }
+            let registry: Registry = serde_json::from_value(reply).map_err(|e| e.to_string())?;
+            registry.validate_documents()?;
+            Ok(registry)
+        },
+    )
 }

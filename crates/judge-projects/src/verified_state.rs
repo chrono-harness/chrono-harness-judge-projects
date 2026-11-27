@@ -44,6 +44,22 @@ pub mod operation_io;
 #[path = "receipt.rs"]
 pub mod receipt_timeout;
 
+#[cfg(verus_keep_ghost)]
+#[path = "main.rs"]
+pub mod entrypoint;
+#[cfg(verus_keep_ghost)]
+#[path = "git_reader.rs"]
+pub mod git_reader;
+#[cfg(verus_keep_ghost)]
+#[path = "pair_checks.rs"]
+pub mod pair_checks;
+#[cfg(verus_keep_ghost)]
+#[path = "registration.rs"]
+pub mod registration;
+#[cfg(verus_keep_ghost)]
+#[path = "runtime_session.rs"]
+pub mod runtime_session;
+
 verus! {
 
 /// A diagnostic sink may reject the message after the query already failed.

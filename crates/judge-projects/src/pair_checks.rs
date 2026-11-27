@@ -1,13 +1,70 @@
+#![allow(unexpected_cfgs)]
+#[cfg(not(verus_keep_ghost))]
+use vstd::prelude::verus;
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+verus! {
+pub enum PairLookupError<'a> {
+    MissingTest(&'a str),
+    MissingProductionLink,
+    MissingProduction(&'a str),
+}
+
+/// Resolve the opposite row using the same first-match lookup as the registry iterator.
+pub fn lookup_pair<'a, T, F>(
+    row: T, forward: Option<&'a str>, reverse: Option<&'a str>, find: F,
+) -> (out: Result<(T, T), PairLookupError<'a>>)
+    where F: FnOnce(&'a str) -> Option<T>,
+    requires forall|id: &'a str| find.requires((id,)),
+    ensures match (forward, reverse) {
+        (Some(id), _) => exists|other: Option<T>| #[trigger] find.ensures((id,), other)
+            && out == match other {
+                Some(test) => Ok((row, test)),
+                None => Err(PairLookupError::MissingTest(id)),
+            },
+        (None, Some(id)) => exists|other: Option<T>| #[trigger] find.ensures((id,), other)
+            && out == match other {
+                Some(production) => Ok((production, row)),
+                None => Err(PairLookupError::MissingProduction(id)),
+            },
+        (None, None) => out == Err::<(T, T), PairLookupError>(PairLookupError::MissingProductionLink),
+    },
+{
+    if let Some(id) = forward {
+        let other = find(id);
+        assert(find.ensures((id,), other));
+        return match other {
+            Some(test) => Ok((row, test)),
+            None => Err(PairLookupError::MissingTest(id)),
+        };
+    }
+    let id = match reverse { Some(id) => id, None => return Err(PairLookupError::MissingProductionLink) };
+    let other = find(id);
+    assert(find.ensures((id,), other));
+    match other {
+        Some(production) => Ok((production, row)),
+        None => Err(PairLookupError::MissingProduction(id)),
+    }
+}
+}
+
+#[cfg(not(verus_keep_ghost))]
 use crate::verified_languages;
+#[cfg(not(verus_keep_ghost))]
 use serde_json::Value;
+#[cfg(not(verus_keep_ghost))]
 use std::collections::{BTreeMap, BTreeSet};
+#[cfg(not(verus_keep_ghost))]
 use std::path::Path;
 
+#[cfg(not(verus_keep_ghost))]
 struct RegistryLinks<'a> {
     rows: &'a [Value],
     test_field: &'a str,
 }
 
+#[cfg(not(verus_keep_ghost))]
 impl verified_languages::PairTable for RegistryLinks<'_> {
     fn len(&self) -> usize {
         self.rows.len()
@@ -23,6 +80,7 @@ impl verified_languages::PairTable for RegistryLinks<'_> {
     }
 }
 
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn dedicated_pair<'a>(
     registry: &Value,
     collection: &'a [Value],
@@ -31,26 +89,23 @@ pub(crate) fn dedicated_pair<'a>(
     row: &'a Value,
 ) -> Result<(&'a Value, &'a Value), String> {
     let row_id = row["id"].as_str().unwrap();
-    let (production, test) = if let Some(test) = row[test_field].as_str() {
-        (
-            row,
-            collection.iter().find(|p| p["id"] == test).ok_or_else(|| {
-                format!(
-                    "E_TEST_PAIR: {prefix}:{row_id} names missing dedicated test {prefix}:{test}"
-                )
-            })?,
-        )
-    } else {
-        let prod = row["tests_for"]
-            .as_str()
-            .ok_or_else(|| format!("E_TEST_PAIR: {prefix}:{row_id} is missing tests_for"))?;
-        (
-            collection.iter().find(|p| p["id"] == prod).ok_or_else(|| {
-                format!("E_TEST_PAIR: {prefix}:{row_id} names missing production {prefix}:{prod}")
-            })?,
-            row,
-        )
-    };
+    let (production, test) = lookup_pair(
+        row,
+        row[test_field].as_str(),
+        row["tests_for"].as_str(),
+        |id| collection.iter().find(|p| p["id"] == id),
+    )
+    .map_err(|error| match error {
+        PairLookupError::MissingTest(id) => {
+            format!("E_TEST_PAIR: {prefix}:{row_id} names missing dedicated test {prefix}:{id}")
+        }
+        PairLookupError::MissingProductionLink => {
+            format!("E_TEST_PAIR: {prefix}:{row_id} is missing tests_for")
+        }
+        PairLookupError::MissingProduction(id) => {
+            format!("E_TEST_PAIR: {prefix}:{row_id} names missing production {prefix}:{id}")
+        }
+    })?;
     let prod_id = production["id"].as_str().unwrap();
     let test_id = test["id"].as_str().unwrap();
     let links = RegistryLinks {
@@ -89,6 +144,7 @@ pub(crate) fn dedicated_pair<'a>(
 }
 
 /// Check the files and reciprocal pairs owned by definitions reached in the registered graph.
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn check<'a>(
     root: &Path,
     registry: &Value,
@@ -202,6 +258,7 @@ pub(crate) fn check<'a>(
 }
 
 /// The checked method supplies the helper owner and the original process supplies its argv.
+#[cfg(not(verus_keep_ghost))]
 pub(crate) fn assertion_language<'a>(
     registry: &'a Value,
     production: &str,

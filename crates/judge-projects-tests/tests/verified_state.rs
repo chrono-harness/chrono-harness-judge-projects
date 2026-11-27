@@ -32,6 +32,150 @@ mod release_observation;
 mod impact_summary;
 
 verus! {
+#[cfg(verus_keep_ghost)]
+fn native_query_names_match_only_with_their_complete_argument_count() {
+    proof {
+        reveal_strlit("--protocol");
+        reveal_strlit("--version");
+        reveal_strlit("check-collection-v1");
+        reveal_strlit("check-pairs-v1");
+        reveal_strlit("chrono-judge/v1");
+        reveal_strlit("evaluate-projects-v1");
+        reveal_strlit("execute-plan-v1");
+        reveal_strlit("extra");
+        reveal_strlit("read-results-v1");
+        assert("--version"@.len() == 9);
+        assert("evaluate-projects-v1"@.len() == 20);
+        assert("execute-plan-v1"@.len() == 15);
+        assert("check-pairs-v1"@.len() == 14);
+        assert("read-results-v1"@.len() == 15);
+        assert("check-collection-v1"@.len() == 19);
+        assert("--protocol"@.len() == 10);
+        assert("chrono-judge/v1"@.len() == 15);
+        assert("extra"@.len() == 5);
+        assert("execute-plan-v1"@[0] != "read-results-v1"@[0]);
+        assert("execute-plan-v1"@[0] != "chrono-judge/v1"@[0]);
+        assert("read-results-v1"@[0] != "chrono-judge/v1"@[0]);
+    }
+
+    use state::entrypoint::{Entry, entry};
+    let observed = entry(0, None, None);
+    assert(observed == Entry::Usage);
+    let observed = entry(1, Some("--version"), None);
+    assert(observed == Entry::Version);
+    let observed = entry(1, Some("evaluate-projects-v1"), None);
+    assert(observed == Entry::Evaluate);
+    let observed = entry(1, Some("execute-plan-v1"), None);
+    assert(observed == Entry::Execute);
+    let observed = entry(1, Some("check-pairs-v1"), None);
+    assert(observed == Entry::Pairs);
+    let observed = entry(1, Some("read-results-v1"), None);
+    assert(observed == Entry::Results);
+    let observed = entry(1, Some("check-collection-v1"), None);
+    assert(observed == Entry::Collection);
+    let observed = entry(2, Some("--protocol"), Some("chrono-judge/v1"));
+    assert(observed == Entry::Protocol);
+    let observed = entry(3, Some("--protocol"), Some("chrono-judge/v1"));
+    assert(observed == Entry::Usage);
+    let observed = entry(2, Some("--version"), Some("extra"));
+    assert(observed == Entry::Usage);
+    let observed = entry(2, Some("--protocol"), None);
+    assert(observed == Entry::Usage);
+}
+
+#[cfg(verus_keep_ghost)]
+fn native_git_reader_preserves_original_identity_and_session_outcomes() {
+    proof {
+        reveal_strlit("E_TOOL_BINDING: runner executable changed");
+        reveal_strlit("different");
+        reveal_strlit("read");
+        reveal_strlit("session");
+        reveal_strlit("wanted");
+        assert("wanted"@.len() == 6);
+        assert("different"@.len() == 9);
+    }
+
+    let open = || -> (r: Result<u8, String>) ensures r == Ok::<u8, String>(41), {Ok(41)};
+    let forbidden = || -> (r: Result<u8, String>) requires false, { Ok(0) };
+    let prior = state::git_reader::open_bound_reader(Err("read".to_string()), "wanted", forbidden);
+    assert(prior matches Err(e) && e@ == "read"@);
+    let changed = state::git_reader::open_bound_reader(Ok("different".to_string()), "wanted", forbidden);
+    assert(changed matches Err(e) && e@ == "E_TOOL_BINDING: runner executable changed"@);
+    let ok = state::git_reader::open_bound_reader(Ok("wanted".to_string()), "wanted", open);
+    assert(ok == Ok::<u8, String>(41));
+    let failed = || -> (r: Result<u8, String>) ensures r matches Err(e) && e@ == "session"@, { Err("session".to_string()) };
+    let r = state::git_reader::open_bound_reader(Ok("wanted".to_string()), "wanted", failed);
+    assert(r matches Err(e) && e@ == "session"@);
+}
+
+#[cfg(verus_keep_ghost)]
+fn framed_runtime_receipts_preserve_wire_and_application_errors() {
+    broadcast use vstd::array::group_array_axioms;
+    let decoder = |_v: &[u8]| -> (r: Result<Result<u8, String>, String>) requires false, { Ok(Ok(0)) };
+    let short = state::runtime_session::runner_reply(&[65u8], decoder);
+    assert(short matches Err(e) && e@ == "E_PROTOCOL: incomplete runner response"@);
+    let empty = state::runtime_session::runner_reply(&[], decoder);
+    assert(empty matches Err(e) && e@ == "E_PROTOCOL: incomplete runner response"@);
+    let original = |v: &[u8]| -> (r: Result<Result<u8, String>, String>) ensures
+      (v@.len() == 2 && v@[0] == 65 && v@[1] == 10) ==> r == Ok::<_, String>(Ok::<u8, String>(7)),
+    { Ok(Ok(7)) };
+    let observed = state::runtime_session::runner_reply(&[65u8, 10], original);
+    assert(observed == Ok::<u8, String>(7));
+    let wire = |_v: &[u8]| -> (r: Result<Result<u8, String>, String>) ensures r matches Err(e) && e@ == "decode"@, {Err("decode".to_string())};
+    let invalid = state::runtime_session::runner_reply(&[10u8], wire);
+    assert(invalid matches Err(e) && e@ == "decode"@);
+    let app = |_v: &[u8]| -> (r: Result<Result<u8, String>, String>) ensures r matches Ok(Err(e)) && e@ == "remote"@, {Ok(Err("remote".to_string()))};
+    let failed = state::runtime_session::runner_reply(&[10u8], app);
+    assert(failed matches Err(e) && e@ == "remote"@);
+}
+
+#[cfg(verus_keep_ghost)]
+fn registration_view_prioritizes_identity_then_observations_and_consumes_the_remaining_reply() {
+    let no_observation = |_r: u8| -> (o: (u8, Result<(), String>)) requires false, { (0, Ok(())) };
+    let no_consumption = |_r: u8| -> (o: Result<u8, String>) requires false, { Ok(0) };
+    let record = |r: u8| -> (o: (u8, Result<(), String>)) ensures o.0 == r && (o.1 matches Err(e) && e@ == "binding"@), {(r, Err("binding".to_string()))};
+    let take = |r: u8| -> (o: Result<u8, String>) ensures o == Ok::<u8, String>(r), {Ok(r)};
+    let a = state::registration::admit_project_view(8u8, false, true, no_observation, no_consumption);
+    assert(a matches Err(e) && e@ == "E_PROTOCOL: registration project views identity"@);
+    let b = state::registration::admit_project_view(8u8, true, false, no_observation, no_consumption);
+    assert(b matches Err(e) && e@ == "E_PROTOCOL: registration project views identity"@);
+    let c = state::registration::admit_project_view(8u8, true, true, record, no_consumption);
+    assert(c matches Err(e) && e@ == "binding"@);
+    let updated = |_r: u8| -> (o: (u8, Result<(), String>)) ensures o == (31u8, Ok::<(), String>(())), {(31, Ok(()))};
+    let observed = state::registration::admit_project_view(8u8, true, true, updated, take);
+    assert(observed == Ok::<u8, String>(31));
+    let reject = |_r: u8| -> (o: Result<u8, String>) ensures o matches Err(e) && e@ == "view"@, {Err("view".to_string())};
+    let e = state::registration::admit_project_view(8u8, true, true, updated, reject);
+    assert(e matches Err(msg) && msg@ == "view"@);
+}
+
+#[cfg(verus_keep_ghost)]
+fn reciprocal_pair_lookup_chooses_the_forward_link_and_preserves_both_row_identities() {
+    proof {
+        reveal_strlit("missing");
+        reveal_strlit("other");
+        reveal_strlit("test");
+        assert("test"@.len() == 4);
+        assert("missing"@.len() == 7);
+        assert("other"@.len() == 5);
+    }
+
+    use state::pair_checks::{lookup_pair, PairLookupError};
+    let lookup = |id: &str| -> (r: Option<u8>) ensures r == (if id@ == "test"@ {Some(17u8)} else {None}), {
+        if <&str>::exec_eq(id, "test") {Some(17)} else {None}
+    };
+    let observed = lookup_pair(2u8, Some("test"), Some("other"), lookup);
+    assert(observed == Ok::<_, PairLookupError>((2u8, 17u8)));
+    let observed = lookup_pair(2u8, None, Some("test"), lookup);
+    assert(observed == Ok::<_, PairLookupError>((17u8, 2u8)));
+    let observed = lookup_pair(2u8, None, None, lookup);
+    assert(observed == Err::<(u8, u8), _>(PairLookupError::MissingProductionLink));
+    let a = lookup_pair(2u8, Some("missing"), Some("test"), lookup);
+    assert(a matches Err(PairLookupError::MissingTest(id)) && id@ == "missing"@);
+    let b = lookup_pair(2u8, None, Some("other"), lookup);
+    assert(b matches Err(PairLookupError::MissingProduction(id)) && id@ == "other"@);
+}
+
 
 #[cfg(verus_keep_ghost)]
 fn streams_cover_only_the_announced_bytes(stdout: usize, stderr: usize, actual: usize) {
@@ -295,6 +439,7 @@ fn whole_report_distinguishes_blocked_failed_error_and_unselected_tests()
     requires vstd::laws_cmp::obeys_cmp::<String>(),
 {
     broadcast use vstd::std_specs::btree::group_btree_axioms;
+    broadcast use vstd::array::group_array_axioms;
     proof {
         reveal_strlit("passed"); reveal_strlit("failed"); reveal_strlit("error"); reveal_strlit("passed ");
         assert("failed"@[0] != "passed"@[0]); assert("failed"@[0] != "error"@[0]);
@@ -317,6 +462,10 @@ fn whole_report_distinguishes_blocked_failed_error_and_unselected_tests()
     let nonstandard = state::evidence_query::report_passed(&typo, 0, &selected, &tests);
     let ordinary_failure = state::has_execution_error(&failed);
     let is_error = state::has_execution_error(&late_error);
+    assert(passed@[0].status@ == "passed"@);
+    assert(failed@[0].status@ == "failed"@);
+    assert(typo@[0].status@ == "passed "@);
+    assert(late_error@[1].status@ == "error"@);
     assert(normal && !rejected && !nonstandard && !ordinary_failure && is_error);
 
     let key = "test:actual".to_string();
