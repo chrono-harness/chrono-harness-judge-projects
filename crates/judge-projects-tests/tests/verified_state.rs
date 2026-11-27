@@ -10,6 +10,11 @@ mod scheduler;
 mod state;
 
 #[cfg(verus_keep_ghost)]
+use state::{execute_query, plan_trace};
+#[cfg(not(verus_keep_ghost))]
+use chrono_judge_projects::execute_query;
+
+#[cfg(verus_keep_ghost)]
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
@@ -126,6 +131,20 @@ fn collection_adds_a_disjoint_report<M: state::operation_claims::Conflict>(
     assert(accepted && known@ == initial.insert(*new_report));
 }
 
+#[cfg(verus_keep_ghost)]
+fn first_failed_trace_write_suppresses_every_later_write(original: u32) {
+    let mut first = None;
+    plan_trace::publish_frame(&mut first,
+        || -> (r: Option<u32>) ensures r.is_none() { None });
+    assert(first.is_none());
+    plan_trace::publish_frame(&mut first,
+        || -> (r: Option<u32>) ensures r == Some(original) { Some(original) });
+    assert(first == Some(original));
+    plan_trace::publish_frame(&mut first,
+        || -> Option<u32> requires false { None });
+    assert(first == Some(original));
+}
+
 fn observed_reply(value: u8, diagnostic: Option<String>) -> (out: Result<(), String>)
     ensures match diagnostic {
         Some(original) => out == Err::<(), String>(original),
@@ -140,14 +159,14 @@ fn observed_reply(value: u8, diagnostic: Option<String>) -> (out: Result<(), Str
 
 #[cfg_attr(not(verus_keep_ghost), test)]
 fn query_keeps_execution_publication_and_error_sink_outcomes() {
-    let matched = state::admit_query_location(true, true);
-    let other_root = state::admit_query_location(false, true);
-    let relative = state::admit_query_location(true, false);
+    let matched = execute_query::admit_query_location(true, true);
+    let other_root = execute_query::admit_query_location(false, true);
+    let relative = execute_query::admit_query_location(true, false);
     assert(matched.is_ok() && other_root.is_err() && relative.is_err());
 
-    let ok = state::publish_plan(Ok(7u8), None, observed_reply);
-    let diagnostic = state::publish_plan(Ok(7u8), Some("trace".to_string()), observed_reply);
-    let work = state::publish_plan(Err("work".to_string()), Some("trace".to_string()), observed_reply);
+    let ok = execute_query::publish_plan(Ok(7u8), None, observed_reply);
+    let diagnostic = execute_query::publish_plan(Ok(7u8), Some("trace".to_string()), observed_reply);
+    let work = execute_query::publish_plan(Err("work".to_string()), Some("trace".to_string()), observed_reply);
     assert(ok.is_ok());
     assert(diagnostic matches Err(e) && e@ == "trace"@);
     assert(work matches Err(e) && e@ == "work"@);

@@ -8,6 +8,13 @@ use vstd::prelude::verus;
 use vstd::prelude::*;
 
 #[cfg(verus_keep_ghost)]
+#[path = "execute_query.rs"]
+pub mod execute_query;
+#[cfg(verus_keep_ghost)]
+#[path = "plan_trace.rs"]
+pub mod plan_trace;
+
+#[cfg(verus_keep_ghost)]
 #[path = "compiler.rs"]
 pub mod compiler;
 #[cfg(verus_keep_ghost)]
@@ -29,31 +36,6 @@ pub mod operation_io;
 pub mod receipt_timeout;
 
 verus! {
-
-/// Check the two path observations before opening either the host runner or the routes program.
-pub fn admit_query_location(same_root: bool, absolute_routes: bool) -> (res: Result<(), &'static str>)
-    ensures res.is_ok() == (same_root && absolute_routes),
-        res matches Err(e) ==> e@ == "E_PLAN_BINDING: execute from the plan root with an absolute routes executable"@,
-{
-    if same_root && absolute_routes { Ok(()) } else {
-        Err("E_PLAN_BINDING: execute from the plan root with an absolute routes executable")
-    }
-}
-
-/// A failed execution keeps its own error. A completed execution publishes its actual
-/// result together with the first trace error, and returns the publisher's write/flush result.
-pub fn publish_plan<T, F>(
-    work: Result<T, String>, diagnostic: Option<String>, publish: F,
-) -> (out: Result<(), String>)
-    where F: FnOnce(T, Option<String>) -> Result<(), String>,
-    requires forall|value: T| work == Ok::<T, String>(value) ==> #[trigger] publish.requires((value, diagnostic)),
-    ensures match work {
-        Err(error) => out == Err::<(), String>(error),
-        Ok(value) => publish.ensures((value, diagnostic), out),
-    },
-{
-    match work { Err(error) => Err(error), Ok(value) => publish(value, diagnostic) }
-}
 
 /// A diagnostic sink may reject the message after the query already failed.
 pub fn query_exit<F>(result: Result<(), String>, emit: F) -> (code: u8)
