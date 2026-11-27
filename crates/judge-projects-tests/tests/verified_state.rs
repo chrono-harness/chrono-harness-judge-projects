@@ -36,8 +36,10 @@ verus! {
 #[cfg(verus_keep_ghost)]
 fn streams_cover_only_the_announced_bytes(stdout: usize, stderr: usize, actual: usize) {
     let bound = state::commands::stream_boundary(stdout, stderr, actual);
-    if stdout > actual || stderr as int != actual as int - stdout as int { assert(bound.is_none()); }
-    else { assert(bound == Some(stdout)); }
+    proof {
+        if stdout > actual || stderr as int != actual as int - stdout as int { assert(bound.is_none()); }
+        else { assert(bound == Some(stdout)); }
+    }
     let empty = state::commands::stream_boundary(0, 0, 0);
     assert(empty == Some(0usize));
     let overflow = state::commands::stream_boundary(usize::MAX, 1, 0);
