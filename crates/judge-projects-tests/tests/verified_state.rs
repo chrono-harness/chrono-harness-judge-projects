@@ -27,11 +27,14 @@ mod compiler_fixture;
 #[path = "../examples/release_observation.rs"]
 mod release_observation;
 
+#[cfg(verus_keep_ghost)]
+#[path = "impact_summary.rs"]
+mod impact_summary;
+
 verus! {
 
 #[cfg(verus_keep_ghost)]
-fn streams_cover_only_the_announced_bytes(stdout: usize, stderr: usize, actual: usize,
-    code: i32, output: &[u8], diagnostic: &[u8]) {
+fn streams_cover_only_the_announced_bytes(stdout: usize, stderr: usize, actual: usize) {
     let bound = state::commands::stream_boundary(stdout, stderr, actual);
     if stdout > actual || stderr as int != actual as int - stdout as int { assert(bound.is_none()); }
     else { assert(bound == Some(stdout)); }
@@ -39,9 +42,7 @@ fn streams_cover_only_the_announced_bytes(stdout: usize, stderr: usize, actual: 
     assert(empty == Some(0usize));
     let overflow = state::commands::stream_boundary(usize::MAX, 1, 0);
     assert(overflow.is_none());
-    let reply = state::impact::reply_stream(code, output, diagnostic);
-    if code == 0 { assert(reply == Ok::<&[u8], &[u8]>(output)); }
-    else { assert(reply == Err::<&[u8], &[u8]>(diagnostic)); }
+
 }
 
 

@@ -645,7 +645,16 @@
           "kind": "test-execution",
           "to": "test:judge-projects-tests"
         }
-      ]
+      ],
+      "verification": {
+        "role": "program",
+        "roots": [
+          {
+            "path": "crates/judge-projects-tests/tests/verified_state.rs",
+            "operation": "verify.project-state-tests"
+          }
+        ]
+      }
     },
     {
       "path": "crates/judge-projects-tests/tests/languages.rs",

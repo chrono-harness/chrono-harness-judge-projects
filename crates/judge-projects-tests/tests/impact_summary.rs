@@ -1,7 +1,12 @@
+#![allow(unexpected_cfgs)]
+#[cfg(not(verus_keep_ghost))]
 use chrono_judge_projects::decode_impact;
+#[cfg(not(verus_keep_ghost))]
 use serde_json::{Value, json};
+#[cfg(not(verus_keep_ghost))]
 use std::collections::{BTreeMap, BTreeSet};
 
+#[cfg(not(verus_keep_ghost))]
 #[test]
 fn the_installed_decoder_receives_the_whole_impact_and_returns_affected_and_retired_tests() {
     let input = json!({"closure":{"reached":{"test:kept":[]}},"retired_tests":["old"],"edges":[]});
@@ -44,4 +49,18 @@ fn the_installed_decoder_receives_the_whole_impact_and_returns_affected_and_reti
                 .starts_with(error)
         );
     }
+}
+
+#[cfg(verus_keep_ghost)]
+use vstd::prelude::*;
+
+#[cfg(verus_keep_ghost)]
+verus! {
+fn filemap_reply_uses_the_exit_to_select_original_bytes(
+    code: i32, output: &[u8], diagnostic: &[u8],
+) {
+    let reply = crate::state::impact::reply_stream(code, output, diagnostic);
+    if code == 0 { assert(reply == Ok::<&[u8], &[u8]>(output)); }
+    else { assert(reply == Err::<&[u8], &[u8]>(diagnostic)); }
+}
 }
