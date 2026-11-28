@@ -74,6 +74,44 @@ pub(crate) fn source_bound(unit: Option<&str>, path: Option<&str>, digest: Optio
     has_text(unit,expected_unit) && has_text(path,expected_path) && has_text(digest,expected_digest)
 }
 
+/// The retained summary is a projection of verified originals, not an independent report.
+pub(crate) struct CompletionProjection {
+    pub selected: bool,
+    pub removed: bool,
+    pub warnings: bool,
+    pub test_sources: bool,
+    pub removal_sources: bool,
+    pub required_units_present: bool,
+    pub required_units: bool,
+    pub global_selected: bool,
+    pub tests: bool,
+    pub tools: bool,
+}
+
+pub(crate) fn completed_originals(
+    schema: &str, status: &str, scope: Option<&str>, plan: &str, expected_plan: &str,
+    executed: usize, blocked: usize, fields: CompletionProjection,
+) -> (accepted: bool)
+    ensures accepted == (schema@ == "chrono-collected-completion/v1"@ && status@ == "passed"@
+        && field_text(scope) == Some("collect"@) && plan@ == expected_plan@
+        && executed == 0 && blocked == 0 && fields.selected && fields.removed && fields.warnings
+        && fields.test_sources && fields.removal_sources && fields.required_units_present
+        && fields.required_units && fields.global_selected && fields.tests && fields.tools),
+{
+    has_text(Some(schema), "chrono-collected-completion/v1")
+        && has_text(Some(status), "passed") && has_text(scope, "collect")
+        && has_text(Some(plan), expected_plan) && executed == 0 && blocked == 0
+        && fields.selected && fields.removed && fields.warnings && fields.test_sources
+        && fields.removal_sources && fields.required_units_present && fields.required_units
+        && fields.global_selected && fields.tests && fields.tools
+}
+
+pub(crate) fn runner_program(configured: Option<&str>) -> (name: &str)
+    ensures name@ == match configured { Some(path) => path@, None => "chrono-harness"@ },
+{
+    match configured { Some(path) => path, None => "chrono-harness" }
+}
+
 /// A contribution binds the current route plan and unit before its operation rows can be used.
 pub(crate) fn unit_plan_receipt(plan: &str, expected_plan: &str, scope: Option<&str>, unit: &str,
     completed: bool, blocked: usize, executed: usize, operations: usize) -> (accepted: bool)
@@ -585,13 +623,9 @@ fn collect_reports(
     let limits = req.observations["execution_units"]["collection_limits"]
         .as_object()
         .ok_or("E_COLLECTION_INPUT: collection limits missing")?;
-    let manifest_limit = limits["manifest_bytes"]
-        .as_u64()
-        .filter(|n| *n > 0 && *n <= 64 * 1024 * 1024)
+    let manifest_limit = verified_state::collection_limit(limits["manifest_bytes"].as_u64())
         .ok_or("E_COLLECTION_INPUT: invalid manifest limit")?;
-    let report_limit = limits["report_bytes"]
-        .as_u64()
-        .filter(|n| *n > 0 && *n <= 64 * 1024 * 1024)
+    let report_limit = verified_state::collection_limit(limits["report_bytes"].as_u64())
         .ok_or("E_COLLECTION_INPUT: invalid report limit")?;
     let bytes = report_bytes(&mut originals, &manifest_path, None, manifest_limit)
         .map_err(|e| format!("E_COLLECTION_INPUT: manifest: {e}"))?;
@@ -611,14 +645,16 @@ fn collect_reports(
     let mut test_sources = BTreeMap::<String, Vec<String>>::new();
     let mut removal_sources = BTreeMap::<String, Vec<String>>::new();
     for input in &manifest.reports {
-        if !units.contains_key(&input.unit)
-            || !seen.insert(input.unit.clone())
-            || !wire::is_digest(&input.sha256)
-        {
+        if !verified_state::admit_report_unit(
+            &mut seen,
+            &input.unit,
+            units.contains_key(&input.unit),
+            wire::is_digest(&input.sha256),
+        ) {
             return Err("E_COLLECTION_INPUT: unknown or duplicate unit report".into());
         }
         let expected_path: String = originals.call(json!({"operation":"resolve-original","original":{"path":units[&input.unit].report_path,"sha256":input.sha256},"transport":input.artifacts}))?;
-        if input.path != expected_path {
+        if !has_text(Some(&input.path), &expected_path) {
             return Err(format!(
                 "E_COLLECTION_INPUT: unit report path differs from registration: {}",
                 input.unit
@@ -629,16 +665,14 @@ fn collect_reports(
         }
         let report_bytes = report_bytes(&mut originals, &input.path, None, report_limit)
             .map_err(|e| format!("E_COLLECTION_INPUT: {}: {e}", input.unit))?;
-        if wire::sha256(&report_bytes) != input.sha256 {
+        if !has_text(Some(&wire::sha256(&report_bytes)), &input.sha256) {
             return Err(format!(
                 "E_COLLECTION_INPUT: report digest mismatch: {}",
                 input.unit
             ));
         }
         let report = reader.decode::<Value>(&report_bytes)?;
-        if reader.call::<u64>(json!({"operation":"report-transport-bytes", "report":report,"metadata_bytes": report_bytes.len()}))?
-            > report_limit
-        {
+        if !transport_within_bound(&mut reader, &report, report_bytes.len(), report_limit)? {
             return Err(
                 "full unit metadata and original streams exceed registered report bound".into(),
             );
@@ -701,11 +735,7 @@ fn collect_reports(
                 ));
             }
         }
-        for finding in report["findings"].as_array().ok_or("unit findings")? {
-            if finding["level"] == "warning" {
-                warnings.push(json!({"unit":input.unit,"finding":finding}));
-            }
-        }
+        append_unit_warnings(&mut warnings, &input.unit, &report)?;
         let status = report["status"].as_str().unwrap_or("");
         if report["schema_version"] != 1
             || report["scope"] != "configured-judges"
@@ -757,16 +787,11 @@ fn collect_reports(
             }
             Err(e) => return Err(e.to_string()),
         }
-        for (id, observation) in unit_tools(&report)?
-            .as_object()
-            .ok_or("unit tool bindings")?
-        {
-            if let Some(previous) = tools.insert(id.clone(), observation.clone()) {
-                if previous != *observation {
-                    return Err("E_COLLECTION_INPUT: conflicting original tool observations".into());
-                }
-            }
-        }
+        merge_unit_tools(
+            &mut tools,
+            &report,
+            "E_COLLECTION_INPUT: conflicting original tool observations",
+        )?;
         reports.push(serde_json::json!({
             "unit": input.unit,
             "path": input.path,
@@ -780,7 +805,7 @@ fn collect_reports(
             "artifacts": input.artifacts,
         }));
     }
-    if required.iter().any(|unit| !seen.contains(unit)) {
+    if !verified_state::required_units_present(&required, &seen) {
         return Err("E_COLLECTION_INPUT: missing required unit report".into());
     }
     let selected_ids: Vec<_> = selected.iter().cloned().collect();
@@ -1440,7 +1465,7 @@ fn validate_declared_tools(
     Ok(())
 }
 #[cfg(not(verus_keep_ghost))]
-fn unit_tools(report: &Value) -> Result<Value, String> {
+fn unit_tools(report: &Value) -> Result<serde_json::Map<String, Value>, String> {
     let route = report["judges"]
         .as_array()
         .ok_or("judges")?
@@ -1459,7 +1484,48 @@ fn unit_tools(report: &Value) -> Result<Value, String> {
             .unwrap_or_else(|_| format!("external:{}", t.path.display()));
         tools.insert(id.clone(),json!({"program":t.program,"path":path,"sha256":t.sha256,"version_argv":&t.version.argv[1..],"version_stdout_sha256":t.version.stdout_sha256,"version_stderr_sha256":t.version.stderr_sha256}));
     }
-    Ok(Value::Object(tools))
+    Ok(tools)
+}
+
+#[cfg(not(verus_keep_ghost))]
+fn merge_unit_tools(
+    tools: &mut serde_json::Map<String, Value>,
+    report: &Value,
+    conflict: &str,
+) -> Result<(), String> {
+    for (id, observation) in unit_tools(report)? {
+        let previous_matches = tools.get(&id).map(|previous| previous == &observation);
+        if !verified_state::consistent_observation(previous_matches) {
+            return Err(conflict.into());
+        }
+        tools.insert(id, observation);
+    }
+    Ok(())
+}
+
+#[cfg(not(verus_keep_ghost))]
+fn append_unit_warnings(
+    warnings: &mut Vec<Value>,
+    unit: &str,
+    report: &Value,
+) -> Result<(), String> {
+    for finding in report["findings"].as_array().ok_or("unit findings")? {
+        if has_text(finding["level"].as_str(), "warning") {
+            warnings.push(json!({"unit":unit,"finding":finding}));
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(verus_keep_ghost))]
+fn transport_within_bound(
+    reader: &mut runtime_session::Session,
+    report: &Value,
+    metadata_bytes: usize,
+    limit: u64,
+) -> Result<bool, String> {
+    let bytes = reader.call(json!({"operation":"report-transport-bytes","report":report,"metadata_bytes":metadata_bytes}))?;
+    Ok(verified_state::within_collection_bound(bytes, limit))
 }
 /// Revalidate the original source closure for every complete consumer, without historical execution.
 #[cfg(not(verus_keep_ghost))]
@@ -1506,8 +1572,11 @@ fn verify_completion(
         .as_u64()
         .ok_or("manifest bound")?;
     let manifest_bytes = report_bytes(originals, &completion.source, artifacts, manifest_bound)?;
-    if manifest_bytes.len() as u64 > manifest_bound
-        || wire::sha256(&manifest_bytes) != completion.source_sha256
+    if !verified_state::within_collection_bound(manifest_bytes.len() as u64, manifest_bound)
+        || !has_text(
+            Some(&wire::sha256(&manifest_bytes)),
+            &completion.source_sha256,
+        )
     {
         return Err("E_COLLECTION_INPUT: completed manifest bytes/bound differ".into());
     }
@@ -1552,30 +1621,30 @@ fn verify_completion(
         .as_u64()
         .ok_or("report limit")?;
     for source in &completion.reports {
-        let unit = source["unit"].as_str().ok_or("unit")?;
+        let unit = source["unit"].as_str().ok_or("unit")?.to_owned();
         let address = source["retained_path"]
             .as_str()
             .ok_or("original source address")?;
-        if !units.contains_key(unit)
-            || !seen.insert(unit.to_owned())
-            || source["path"]
-                != originals.call::<String>(json!({"operation":"resolve-original","original":{"path":units[unit].report_path,"sha256":source["sha256"].as_str().ok_or("source digest")?},"transport":source["artifacts"]}))?
-        {
+        if !verified_state::admit_report_unit(&mut seen, &unit, units.contains_key(&unit), true)
+            || !has_text(source["path"].as_str(), &originals.call::<String>(
+                json!({"operation":"resolve-original","original":{"path":units[&unit].report_path,"sha256":source["sha256"].as_str().ok_or("source digest")?},"transport":source["artifacts"]}))?) {
             return Err("E_COLLECTION_INPUT: completion source set".into());
         }
         let bytes = report_bytes(originals, address, artifacts, limit)?;
-        if bytes.len() as u64 > limit
-            || source["sha256"] != wire::sha256(&bytes)
-            || address
-                != format!(
+        if !verified_state::within_collection_bound(bytes.len() as u64, limit)
+            || !has_text(source["sha256"].as_str(), &wire::sha256(&bytes))
+            || !has_text(
+                Some(address),
+                &format!(
                     ".chrono-harness/state/import-{}.json",
                     source["sha256"].as_str().ok_or("original digest")?
-                )
+                ),
+            )
         {
             return Err("E_COLLECTION_INPUT: original source bytes/address".into());
         }
         let report = reader.decode::<Value>(&bytes)?;
-        if reader.call::<u64>(json!({"operation":"report-transport-bytes", "report":report,"metadata_bytes": bytes.len()}))? > limit {
+        if !transport_within_bound(&mut reader, &report, bytes.len(), limit)? {
             return Err("original report metadata and streams exceed registered bound".into());
         }
         if source["runner_sha256"] != req.runner.sha256
@@ -1585,11 +1654,7 @@ fn verify_completion(
         {
             return Err("E_COLLECTION_INPUT: completion source projection differs".into());
         }
-        for finding in report["findings"].as_array().ok_or("unit findings")? {
-            if finding["level"] == "warning" {
-                warnings.push(json!({"unit":unit,"finding":finding}));
-            }
-        }
+        append_unit_warnings(&mut warnings, &unit, &report)?;
         let resolved: Value = originals.call(json!({"operation":"resolve-map","artifacts":source.get("retained_artifacts").unwrap_or(&json!({})),"closure":artifacts}))?;
         let verified = validate_unit_report(
             originals,
@@ -1599,7 +1664,7 @@ fn verify_completion(
             &units,
             &selected,
             &required,
-            unit,
+            &unit,
             &report,
             plan,
             effective,
@@ -1617,19 +1682,12 @@ fn verify_completion(
                 &mut removal_sources,
                 &test,
                 &replacement,
-                unit,
+                &unit,
             ) {
                 return Err("removal source conflict".into());
             }
         }
-        for (id, t) in unit_tools(&report)?.as_object().unwrap() {
-            if tools
-                .insert(id.clone(), t.clone())
-                .is_some_and(|previous| previous != *t)
-            {
-                return Err("original tool conflict".into());
-            }
-        }
+        merge_unit_tools(&mut tools, &report, "original tool conflict")?;
     }
     let requests = r.retirements.as_ref().map_err(Clone::clone)?;
     for retired in req.impact["retired_tests"]
@@ -1652,23 +1710,27 @@ fn verify_completion(
     }
     let selected_ids: Vec<_> = selected.into_iter().collect();
     check_selected_coverage(&selected_ids, &tests)?;
-    if completion.schema != "chrono-collected-completion/v1"
-        || completion.status != "passed"
-        || results.scope.as_deref() != Some("collect")
-        || results.plan != plan.identity
-        || !results.executed.is_empty()
-        || !results.blocked.is_empty()
-        || results.selected != selected_ids
-        || results.removed != removed
-        || completion.warnings != warnings
-        || completion.test_sources != test_sources
-        || completion.removal_sources != removal_sources
-        || required.iter().any(|unit| !seen.contains(unit))
-        || completion.required_units != required
-        || completion.global_selected != selected_ids
-        || results.tests != tests
-        || completion.tools != Value::Object(tools)
-    {
+    if !completed_originals(
+        &completion.schema,
+        &completion.status,
+        results.scope.as_deref(),
+        &results.plan,
+        &plan.identity,
+        results.executed.len(),
+        results.blocked.len(),
+        CompletionProjection {
+            selected: results.selected == selected_ids,
+            removed: results.removed == removed,
+            warnings: completion.warnings == warnings,
+            test_sources: completion.test_sources == test_sources,
+            removal_sources: completion.removal_sources == removal_sources,
+            required_units_present: verified_state::required_units_present(&required, &seen),
+            required_units: completion.required_units == required,
+            global_selected: completion.global_selected == selected_ids,
+            tests: results.tests == tests,
+            tools: completion.tools == Value::Object(tools),
+        },
+    ) {
         return Err("E_COLLECTION_INPUT: completed original coverage/tools differ".into());
     }
     reader.close()?;
@@ -1714,9 +1776,7 @@ pub fn host_runner(root: &Path) -> Result<std::path::PathBuf, String> {
     let config = registration::host_config(root)?;
     crate::wire::resolve_program(
         root,
-        config["runner"]["path"]
-            .as_str()
-            .unwrap_or("chrono-harness"),
+        runner_program(config["runner"]["path"].as_str()),
         None,
     )
 }
@@ -1852,9 +1912,9 @@ pub(crate) fn assertion_helpers(
                         .find(|op| op.method.operation == name)
                         .ok_or("E_EXECUTION: assertion helper method missing")?
                         .method;
-                    if receipt.operation != name
-                        || receipt.plan != plan.identity
-                        || receipt.method != crate::wire::digest(method)?
+                    if !has_text(Some(&receipt.operation), name)
+                        || !has_text(Some(&receipt.plan), &plan.identity)
+                        || !has_text(Some(&receipt.method), &crate::wire::digest(method)?)
                     {
                         return Err(format!(
                             "E_EXECUTION: {test} assertion helper {name} receipt differs from its method"

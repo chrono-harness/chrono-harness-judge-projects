@@ -350,6 +350,62 @@ pub fn record_removal(
     true
 }
 
+/// Reserve a declared identity before asking the original store to resolve its path.
+pub(crate) fn admit_report_unit(
+    seen: &mut BTreeSet<String>, unit: &String, declared: bool, valid_digest: bool,
+) -> (accepted: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures accepted == (declared && valid_digest && !old(seen)@.contains(*unit)),
+        accepted ==> seen@ == old(seen)@.insert(*unit),
+        !accepted ==> seen@ == old(seen)@,
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    if !declared || !valid_digest { return false; }
+    seen.insert(unit.clone())
+}
+
+pub(crate) fn required_units_present(required: &[String], seen: &BTreeSet<String>) -> (complete: bool)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures complete == (forall|i: int| 0 <= i < required.len() ==> seen@.contains(#[trigger] required@[i])),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut i = 0;
+    while i < required.len()
+        invariant vstd::laws_cmp::obeys_cmp::<String>(), i <= required.len(),
+            forall|j: int| 0 <= j < i ==> seen@.contains(#[trigger] required@[j]),
+        decreases required.len() - i,
+    {
+        let unit = &required[i];
+        if !seen.contains(unit) {
+            assert(!seen@.contains(required@[i as int]));
+            return false;
+        }
+        assert(seen@.contains(required@[i as int]));
+        i += 1;
+    }
+    true
+}
+
+pub(crate) fn collection_limit(bytes: Option<u64>) -> (limit: Option<u64>)
+    ensures limit == match bytes { Some(n) if 0 < n <= 64 * 1024 * 1024 => Some(n), _ => None },
+{
+    match bytes { Some(n) if 0 < n && n <= 64 * 1024 * 1024 => Some(n), _ => None }
+}
+
+/// Raw metadata and the runner's measured metadata-plus-streams projection use the same bound.
+pub(crate) fn within_collection_bound(bytes: u64, bound: u64) -> (accepted: bool)
+    ensures accepted == (bytes <= bound),
+{
+    bytes <= bound
+}
+
+/// Report values reach this wrapper through their decoded structural equality.
+pub(crate) fn consistent_observation(previous_matches: Option<bool>) -> (ok: bool)
+    ensures ok == (previous_matches != Some(false)),
+{
+    match previous_matches { Some(matches) => matches, None => true }
+}
+
 /// Receipt and original payloads are carried through the wire without inspecting them here.
 #[cfg_attr(not(verus_keep_ghost), derive(Clone, Debug, serde::Serialize, serde::Deserialize))]
 pub struct OperationRow<R, O> {
