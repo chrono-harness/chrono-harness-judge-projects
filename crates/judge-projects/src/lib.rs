@@ -6,6 +6,86 @@ use vstd::prelude::verus;
 use vstd::prelude::*;
 
 verus! {
+pub open spec fn field_text(v: Option<&str>) -> Option<Seq<char>> {
+    match v { Some(s) => Some(s@), None => None }
+}
+
+pub(crate) fn has_text(value: Option<&str>, expected: &str) -> (same: bool)
+    ensures same == (field_text(value) == Some(expected@)),
+{
+    match value {
+        None => false,
+        Some(s) => <&str as vstd::contrib::exec_spec::ExecSpecEq>::exec_eq(s,expected),
+    }
+}
+
+pub(crate) fn collection_manifest(schema: &str) -> (accepted: bool)
+    ensures accepted == (schema@ == "chrono-full-collection/v1"@ || schema@ == "chrono-ci-collection/v1"@),
+{
+    has_text(Some(schema),"chrono-full-collection/v1") || has_text(Some(schema),"chrono-ci-collection/v1")
+}
+
+/// Both manifest producers may omit either pin. A supplied pin must match its original.
+pub(crate) fn executable_pins(runner: Option<&str>, judge: Option<&str>, expected_runner: &str, expected_judge: Option<&str>) -> (accepted: bool)
+    ensures accepted == ((runner.is_none() || field_text(runner) == Some(expected_runner@))
+        && (judge.is_none() || field_text(judge) == field_text(expected_judge))),
+{
+    let runner_ok = match runner { None => true, Some(pin) => has_text(Some(pin),expected_runner) };
+    runner_ok && match judge { None => true, Some(pin) => has_text(expected_judge,pin) }
+}
+
+/// These string identities travel together with the typed JSON DELTA and environment.
+pub(crate) struct UnitIdentity<'a> {
+    pub base: &'a str,
+    pub candidate: &'a str,
+    pub tree: &'a str,
+    pub registry: &'a str,
+    pub context: &'a str,
+}
+
+pub(crate) fn report_identity(actual: [Option<&str>; 5], expected: UnitIdentity) -> (accepted: bool)
+    ensures accepted == (field_text(actual[0]) == Some(expected.base@)
+        && field_text(actual[1]) == Some(expected.candidate@) && field_text(actual[2]) == Some(expected.tree@)
+        && field_text(actual[3]) == Some(expected.registry@) && field_text(actual[4]) == Some(expected.context@)),
+{
+    has_text(actual[0],expected.base) && has_text(actual[1],expected.candidate)
+        && has_text(actual[2],expected.tree) && has_text(actual[3],expected.registry)
+        && has_text(actual[4],expected.context)
+}
+
+/// Environment declaration and effective candidate file must both bind the same tool bytes.
+pub(crate) fn tool_input<'a,F: FnOnce() -> Option<&'a str>>(path_matches: bool, declaration: Option<&str>, candidate: F, digest: &str) -> (bound: bool)
+    requires path_matches && field_text(declaration) == Some(digest@) ==> candidate.requires(()),
+    ensures (!path_matches || field_text(declaration) != Some(digest@)) ==> !bound,
+        path_matches && field_text(declaration) == Some(digest@) ==>
+            exists|got: Option<&str>| #[trigger] candidate.ensures((),got) && bound == (field_text(got) == Some(digest@)),
+{
+    if !path_matches || !has_text(declaration,digest) { return false; }
+    let got = candidate();
+    assert(candidate.ensures((),got));
+    has_text(got,digest)
+}
+
+pub(crate) fn source_bound(unit: Option<&str>, path: Option<&str>, digest: Option<&str>,
+    expected_unit: &str, expected_path: &str, expected_digest: &str) -> (bound: bool)
+    ensures bound == (field_text(unit) == Some(expected_unit@) && field_text(path) == Some(expected_path@)
+        && field_text(digest) == Some(expected_digest@)),
+{
+    has_text(unit,expected_unit) && has_text(path,expected_path) && has_text(digest,expected_digest)
+}
+
+/// A contribution binds the current route plan and unit before its operation rows can be used.
+pub(crate) fn unit_plan_receipt(plan: &str, expected_plan: &str, scope: Option<&str>, unit: &str,
+    completed: bool, blocked: usize, executed: usize, operations: usize) -> (accepted: bool)
+    ensures accepted == (plan@ == expected_plan@ && field_text(scope) == Some("unit:"@ + unit@)
+        && !completed && blocked == 0 && executed == operations),
+{
+    let mut expected_scope = "unit:".to_string();
+    vstd::string::StringExecFns::append(&mut expected_scope,unit);
+    has_text(Some(plan),expected_plan) && has_text(scope,expected_scope.as_str()) && !completed
+        && blocked == 0 && executed == operations
+}
+
 /// Apply the scheduler's capacity, prerequisite and live-claim observations.
 pub(crate) fn can_dispatch<W: FnOnce() -> bool, C: FnOnce() -> bool>(
     running: usize, limit: usize, waiting: W, conflict: C,
@@ -398,19 +478,9 @@ pub fn check_pairs_with(
     let Query { registry, owners } =
         serde_json::from_reader(input).map_err(|error| error.to_string())?;
     validate(&registry)?;
-    for (key, prefix, test_field) in [
-        ("projects", "project", "test_project"),
-        ("scripts", "script", "test_script"),
-    ] {
-        let collection = registry[key].as_array().unwrap();
-        for row in collection {
-            let id = row["id"].as_str().unwrap();
-            if owners.contains(&format!("{prefix}:{id}")) {
-                pair_checks::dedicated_pair(&registry, collection, prefix, test_field, row)?;
-            }
-        }
-    }
-    Ok(())
+    pair_checks::selected_pairs(&registry, &owners, |rows, prefix, field, row| {
+        pair_checks::dedicated_pair(&registry, rows, prefix, field, row).map(|_| ())
+    })
 }
 
 #[cfg(not(verus_keep_ghost))]
@@ -527,10 +597,7 @@ fn collect_reports(
         .map_err(|e| format!("E_COLLECTION_INPUT: manifest: {e}"))?;
     let manifest_sha256 = wire::sha256(&bytes);
     let manifest: wire::FullManifest = reader.decode(&bytes)?;
-    if !matches!(
-        manifest.schema.as_str(),
-        "chrono-full-collection/v1" | "chrono-ci-collection/v1"
-    ) {
+    if !collection_manifest(&manifest.schema) {
         return Err("E_COLLECTION_INPUT: unsupported manifest schema".into());
     }
     let mut seen = BTreeSet::new();
@@ -576,15 +643,12 @@ fn collect_reports(
                 "full unit metadata and original streams exceed registered report bound".into(),
             );
         }
-        if input
-            .runner_sha256
-            .as_deref()
-            .is_some_and(|pin| pin != req.runner.sha256)
-            || input
-                .judge_sha256
-                .as_deref()
-                .is_some_and(|pin| pin != report["judge_sha256"].as_str().unwrap_or_default())
-        {
+        if !executable_pins(
+            input.runner_sha256.as_deref(),
+            input.judge_sha256.as_deref(),
+            &req.runner.sha256,
+            Some(report["judge_sha256"].as_str().unwrap_or_default()),
+        ) {
             return Err(format!(
                 "E_COLLECTION_INPUT: supplied executable pin differs: {}",
                 input.unit
@@ -810,11 +874,22 @@ fn validate_unit_report(
     if report["schema_version"] != 1
         || report["scope"] != "configured-judges"
         || report["execution_scope"] != json!({"kind":"unit","unit":unit})
-        || report["base"] != req.base.commit
-        || report["candidate"] != req.candidate.commit
-        || report["candidate_tree"] != req.candidate.tree
-        || report["registry_digest"] != req.registries.digest
-        || report["context_digest"] != req.context.sha256
+        || !report_identity(
+            [
+                report["base"].as_str(),
+                report["candidate"].as_str(),
+                report["candidate_tree"].as_str(),
+                report["registry_digest"].as_str(),
+                report["context_digest"].as_str(),
+            ],
+            UnitIdentity {
+                base: &req.base.commit,
+                candidate: &req.candidate.commit,
+                tree: &req.candidate.tree,
+                registry: &req.registries.digest,
+                context: &req.context.sha256,
+            },
+        )
         || report["delta"] != json!(req.delta)
         || report["environment"] != req.observations["environment"]
         || report["base_snapshot"] != json!(top_request.base.root)
@@ -1059,13 +1134,17 @@ fn validate_unit_report(
     }
     let results: Results = serde_json::from_value(original_tests.clone())
         .map_err(|e| format!("E_COLLECTION_INPUT: unit results: {e}"))?;
-    if results.plan != route_plan.identity
-        || results.selected != owned.iter().cloned().collect::<Vec<_>>()
-        || results.scope != Some(format!("unit:{unit}"))
-        || results.completion.is_some()
-        || results.blocked.len() > 0
+    if !unit_plan_receipt(
+        &results.plan,
+        &route_plan.identity,
+        results.scope.as_deref(),
+        unit,
+        results.completion.is_some(),
+        results.blocked.len(),
+        results.executed.len(),
+        route_plan.operations.len(),
+    ) || results.selected != owned.iter().cloned().collect::<Vec<_>>()
         || !verified_state::unit_test_results_complete(&owned, &results.tests)
-        || results.executed.len() != route_plan.operations.len()
     {
         return Err(format!(
             "E_COLLECTION_INPUT: unit contribution is incomplete: {unit}"
@@ -1100,21 +1179,18 @@ fn validate_unit_report(
         return Err("E_COLLECTION_INPUT: routes receipt plan differs".into());
     }
     for operation in &route_plan.operations {
-        let rows: Vec<_> = results
-            .executed
-            .iter()
-            .filter(|row| row.operation == operation.method.operation)
-            .collect();
-        if rows.len() != 1
-            || rows[0].status != "passed"
-            || rows[0].error.is_some()
-            || checked["operations"].get(&operation.method.operation) != Some(&Value::Null)
-            || rows[0].receipt.as_ref().is_none_or(|r| {
-                reader
-                    .call::<()>(json!({"operation":"check-process","process":r.process}))
-                    .is_err()
-            })
-        {
+        let receipt = verified_state::operation_receipt(
+            &results.executed,
+            &operation.method.operation,
+            checked["operations"]
+                .get(&operation.method.operation)
+                .map(Value::is_null),
+        );
+        if receipt.is_none_or(|r| {
+            reader
+                .call::<()>(json!({"operation":"check-process","process":r.process}))
+                .is_err()
+        }) {
             return Err(format!(
                 "E_COLLECTION_INPUT: receipt differs: {unit}/{}",
                 operation.method.operation
@@ -1298,16 +1374,13 @@ fn validate_declared_tools(
         return Err("E_COLLECTION_INPUT: original tool set".into());
     }
     for (id, tool) in &plan.tools {
-        let declarations: Vec<_> = r.config()["tools"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .filter(|t| t["id"] == *id)
-            .collect();
-        if declarations.len() != 1 {
-            return Err("E_COLLECTION_INPUT: tool declaration".into());
-        }
-        let d = declarations[0];
+        let d = pair_checks::registered_row(
+            r.config()["tools"].as_array().unwrap(),
+            &["id"],
+            &[id],
+            true,
+        )
+        .ok_or("E_COLLECTION_INPUT: tool declaration")?;
         let program = d["program"].as_str().ok_or("tool program")?;
         let argv: Vec<String> =
             serde_json::from_value(d["version_argv"].clone()).map_err(|e| e.to_string())?;
@@ -1322,10 +1395,22 @@ fn validate_declared_tools(
         {
             return Err("E_COLLECTION_INPUT: original declared tool path".into());
         }
-        let input = r.config()["environment"]["inputs"].as_array().unwrap().iter().any(|i| {
-            plan.root.join(i["location"].as_str().unwrap()) == tool.path && i["sha256"] == tool.sha256
-                && effective["endpoints"]["candidate"]["files"][i["id"].as_str().unwrap()]["sha256"] == tool.sha256
-        });
+        let input = r.config()["environment"]["inputs"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| {
+                tool_input(
+                    plan.root.join(i["location"].as_str().unwrap()) == tool.path,
+                    i["sha256"].as_str(),
+                    || {
+                        effective["endpoints"]["candidate"]["files"][i["id"].as_str().unwrap()]
+                                ["sha256"]
+                                .as_str()
+                    },
+                    &tool.sha256,
+                )
+            });
         let registered = tool
             .path
             .strip_prefix(&plan.root)
@@ -1427,10 +1512,7 @@ fn verify_completion(
         return Err("E_COLLECTION_INPUT: completed manifest bytes/bound differ".into());
     }
     let manifest: wire::FullManifest = reader.decode(&manifest_bytes)?;
-    if !matches!(
-        manifest.schema.as_str(),
-        "chrono-full-collection/v1" | "chrono-ci-collection/v1"
-    ) {
+    if !collection_manifest(&manifest.schema) {
         return Err("E_COLLECTION_INPUT: completed manifest schema differs".into());
     }
     if manifest.reports.len() != completion.reports.len()
@@ -1438,7 +1520,16 @@ fn verify_completion(
             .reports
             .iter()
             .zip(&completion.reports)
-            .any(|(a, b)| b["unit"] != a.unit || b["path"] != a.path || b["sha256"] != a.sha256)
+            .any(|(a, b)| {
+                !source_bound(
+                    b["unit"].as_str(),
+                    b["path"].as_str(),
+                    b["sha256"].as_str(),
+                    &a.unit,
+                    &a.path,
+                    &a.sha256,
+                )
+            })
     {
         return Err("E_COLLECTION_INPUT: completion manifest sources differ".into());
     }
@@ -1447,12 +1538,12 @@ fn verify_completion(
         .iter()
         .zip(&completion.reports)
         .any(|(a, b)| {
-            a.runner_sha256
-                .as_deref()
-                .is_some_and(|pin| pin != req.runner.sha256)
-                || a.judge_sha256
-                    .as_deref()
-                    .is_some_and(|pin| Some(pin) != b["judge_sha256"].as_str())
+            !executable_pins(
+                a.runner_sha256.as_deref(),
+                a.judge_sha256.as_deref(),
+                &req.runner.sha256,
+                b["judge_sha256"].as_str(),
+            )
         })
     {
         return Err("E_COLLECTION_INPUT: completed manifest executable pin differs".into());

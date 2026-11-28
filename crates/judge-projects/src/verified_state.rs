@@ -62,6 +62,44 @@ pub mod runtime_session;
 
 verus! {
 
+/// Collection requires exactly one passed result with a receipt for the named plan operation.
+pub fn operation_receipt<'a,R,O>(rows: &'a [OperationRow<R,O>], operation: &str, route_null: Option<bool>)
+    -> (receipt: Option<&'a R>)
+    ensures match receipt {
+        Some(r) => route_null == Some(true) && exists|i: int| 0 <= i < rows.len()
+            && #[trigger] rows@[i].operation@ == operation@ && rows@[i].status@ == "passed"@
+            && rows@[i].error.is_none() && rows@[i].receipt == Some(*r)
+            && (forall|j: int| 0 <= j < rows.len() && j != i ==> #[trigger] rows@[j].operation@ != operation@),
+        None => !(route_null == Some(true) && exists|i: int| 0 <= i < rows.len()
+            && #[trigger] rows@[i].operation@ == operation@ && rows@[i].status@ == "passed"@
+            && rows@[i].error.is_none() && rows@[i].receipt.is_some()
+            && (forall|j: int| 0 <= j < rows.len() && j != i ==> #[trigger] rows@[j].operation@ != operation@)),
+    },
+{
+    if !matches!(route_null, Some(true)) { return None; }
+    let mut i = 0;
+    let mut found: Option<usize> = None;
+    while i < rows.len()
+        invariant i <= rows.len(),
+            found matches Some(n) ==> n < i && rows@[n as int].operation@ == operation@,
+            forall|j: int| 0 <= j < i && #[trigger] rows@[j].operation@ == operation@ ==> found == Some(j as usize),
+        decreases rows.len() - i,
+    {
+        if <&str>::exec_eq(rows[i].operation.as_str(),operation) {
+            if let Some(n) = found {
+                assert(n < i && rows@[n as int].operation@ == operation@ && rows@[i as int].operation@ == operation@);
+                return None;
+            }
+            found = Some(i);
+        }
+        i += 1;
+    }
+    let Some(n) = found else { return None; };
+    let row = &rows[n];
+    if !<&str>::exec_eq(row.status.as_str(),"passed") || row.error.is_some() { return None; }
+    row.receipt.as_ref()
+}
+
 /// A diagnostic sink may reject the message after the query already failed.
 pub fn query_exit<F>(result: Result<(), String>, emit: F) -> (code: u8)
     where F: FnOnce(String) -> bool,
