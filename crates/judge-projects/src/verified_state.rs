@@ -323,6 +323,172 @@ pub struct OperationRow<R, O> {
     pub original: Option<O>,
 }
 
+/// Routes decodes the JSON field as null, a string, or another value. Identity
+/// takes precedence over the contents of a reply for another operation.
+pub fn receipt_reply(plan: &str, wanted_plan: &str, op: &str, wanted_op: &str,
+    error: Result<Option<String>, ()>) -> (out: Result<(), String>)
+    ensures if plan@ != wanted_plan@ || op@ != wanted_op@ {
+        out matches Err(s) && s@ == "E_RECEIPT_MISMATCH: routes response refers to another plan or operation"@
+    } else {
+        match error {
+            Ok(None) => out.is_ok(),
+            Ok(Some(s)) => out == Err::<(), String>(s),
+            Err(()) => out matches Err(s) && s@ == "E_RECEIPT_MISMATCH: invalid receipt comparison"@,
+        }
+    },
+{
+    if !<&str>::exec_eq(plan, wanted_plan) || !<&str>::exec_eq(op, wanted_op) {
+        return Err("E_RECEIPT_MISMATCH: routes response refers to another plan or operation".to_string());
+    }
+    match error {
+        Ok(None) => Ok(()), Ok(Some(s)) => Err(s),
+        Err(()) => Err("E_RECEIPT_MISMATCH: invalid receipt comparison".to_string()),
+    }
+}
+
+/// Only the OS/Rust UTF-8 and Unicode classification observations come from
+/// outside the predicate. The code and byte bound use the existing contract.
+pub fn coverage_detail<V, C>(code: &str, bytes: usize, visible: V, control: C) -> (usable: bool)
+    where V: FnOnce() -> bool, C: FnOnce() -> bool,
+    requires visible.requires(()), control.requires(()),
+    ensures if code@ != "E_VERUS_COVERAGE"@ || bytes == 0 || bytes > 1024 { !usable }
+        else if usable { visible.ensures((),true) && control.ensures((),false) }
+        else { visible.ensures((),false) || (visible.ensures((),true) && control.ensures((),true)) },
+{
+    report_coverage_cause(true, code, bytes) && visible() && !control()
+}
+
+pub open spec fn line_start(bytes: Seq<u8>, i: int) -> bool {
+    i == 0 || (0 < i <= bytes.len() && bytes[i-1] == 10)
+}
+
+pub open spec fn whole_line(bytes: Seq<u8>, i: int, j: int) -> bool {
+    0 <= i <= j <= bytes.len() && line_start(bytes, i)
+        && (j == bytes.len() || bytes[j] == 10)
+        && forall|k: int| i <= k < j ==> bytes[k] != 10
+}
+
+/// Return the first whole qualifying line from a complete byte stream.
+/// The adapter interprets each bounded slice once; no line index is allocated.
+pub fn first_coverage_line<T, F>(bytes: &[u8], complete: bool, inspect: F) -> (out: Option<T>)
+    where F: Fn(usize, usize) -> Option<T>,
+    requires forall|i: usize, j: usize| whole_line(bytes@, i as int, j as int)
+        ==> #[trigger] inspect.requires((i,j)),
+    ensures
+        !complete ==> out.is_none(),
+        complete ==> match out {
+            Some(v) => exists|i: usize, j: usize| whole_line(bytes@, i as int, j as int)
+                && #[trigger] inspect.ensures((i,j), Some(v))
+                && forall|a: usize,b: usize| a < i && whole_line(bytes@,a as int,b as int)
+                    ==> #[trigger] inspect.ensures((a,b), None),
+            None => forall|a: usize,b: usize| whole_line(bytes@,a as int,b as int)
+                ==> #[trigger] inspect.ensures((a,b), None),
+        },
+{
+    if !complete { return None; }
+    let mut start = 0usize;
+    let mut end = 0usize;
+    loop
+        invariant complete, start <= end <= bytes.len(), line_start(bytes@,start as int),
+            forall|k: int| start <= k < end ==> bytes@[k] != 10,
+            forall|a: usize, b: usize| a < start && whole_line(bytes@,a as int,b as int)
+                ==> #[trigger] inspect.ensures((a,b), None),
+            forall|i: usize,j: usize| whole_line(bytes@,i as int,j as int)
+                ==> #[trigger] inspect.requires((i,j)),
+        decreases bytes.len() - end,
+    {
+        if end == bytes.len() || bytes[end] == 10 {
+            assert(whole_line(bytes@,start as int,end as int));
+            let observation = inspect(start,end);
+            if let Some(value) = observation {
+                assert(inspect.ensures((start,end),Some(value)));
+                assert(exists|i: usize,j: usize| whole_line(bytes@,i as int,j as int)
+                    && #[trigger] inspect.ensures((i,j),Some(value))
+                    && forall|a: usize,b: usize| a < i && whole_line(bytes@,a as int,b as int)
+                        ==> #[trigger] inspect.ensures((a,b),None));
+                return Some(value);
+            }
+            assert forall|a: usize,b: usize| a <= end && whole_line(bytes@,a as int,b as int)
+                implies #[trigger] inspect.ensures((a,b), None) by {
+                if a > start { assert(bytes@[a as int - 1] != 10); }
+                if a == start {
+                    if b < end { assert(bytes@[b as int] != 10); }
+                    if b > end { assert(bytes@[end as int] != 10); }
+                }
+            }
+            if end == bytes.len() { return None; }
+            start = end + 1;
+        }
+        end += 1;
+    }
+}
+
+pub fn preferred_diagnostic<T,F>(stderr: Option<T>, stdout: F) -> (line: Option<T>)
+    where F: FnOnce() -> Option<T>,
+    requires stdout.requires(()),
+    ensures match stderr { Some(s) => line == Some(s), None => stdout.ensures((),line) },
+{
+    match stderr { Some(s) => Some(s), None => stdout() }
+}
+
+/// The original receipt is carried through every comparison and exit branch.
+pub fn operation_result<R, O, I, M>(
+    id: String, observed: Result<R,String>, inspect: I, exit_message: M,
+) -> (row: OperationRow<R, O>)
+    where I: FnOnce(&R) -> (Result<(),String>, Option<String>, i32), M: FnOnce(&R,i32) -> String,
+    requires forall|r: &R| inspect.requires((r,)),
+        forall|r: &R,code: i32| exit_message.requires((r,code)),
+    ensures row.operation == id, row.original.is_none(),
+        match observed {
+            Err(e) => row.receipt.is_none() && row.status@ == "error"@ && row.error == Some(e),
+            Ok(r) => row.receipt == Some(r) && exists|o: (Result<(),String>,Option<String>,i32)|
+                #[trigger] inspect.ensures((&r,), o) && match (o.0,o.1) {
+                    (Err(e),_) | (Ok(()),Some(e)) => row.status@ == "error"@ && row.error == Some(e),
+                    (Ok(()),None) => if o.2 == 0 { row.status@ == "passed"@ && row.error.is_none() }
+                        else { row.status@ == "failed"@ && (row.error matches Some(e)
+                               && exit_message.ensures((&r,o.2), e)) },
+                },
+        },
+{
+    let (receipt,error,status) = match observed {
+        Err(e) => (None,Some(e),"error"),
+        Ok(r) => {
+            let (comparison,failure,code) = inspect(&r);
+            let (error,status) = match (comparison,failure) {
+                (Err(e),_) | (Ok(()),Some(e)) => (Some(e),"error"),
+                (Ok(()),None) if code != 0 => (Some(exit_message(&r,code)),"failed"),
+                (Ok(()),None) => (None,"passed"),
+            };
+            (Some(r),error,status)
+        },
+    };
+    OperationRow { operation: id, status: status.to_string(), receipt, error, original: None }
+}
+
+/// Formatting an OS error is an adapter operation. The first error and the
+/// publication error are passed in that order, with the original receipt intact.
+pub fn published_operation<R,O,F>(row: OperationRow<R,O>, original: Result<O,String>, describe: F)
+    -> (out: OperationRow<R,O>)
+    where F: FnOnce(Option<String>,String) -> String,
+    requires forall|old: Option<String>, e: String| describe.requires((old,e)),
+    ensures out.operation == row.operation, out.receipt == row.receipt,
+        match original {
+            Ok(file) => out.original == Some(file) && out.status == row.status && out.error == row.error,
+            Err(e) => out.original == row.original && out.status@ == "error"@ && (out.error matches Some(reason)
+                && describe.ensures((row.error,e),reason)),
+        },
+{
+    let mut out = row;
+    match original {
+        Ok(file) => out.original = Some(file),
+        Err(e) => {
+            out.error = Some(describe(out.error,e));
+            out.status = "error".to_string();
+        },
+    }
+    out
+}
+
 pub fn has_execution_error<R, O>(executed: &[OperationRow<R, O>]) -> (found: bool)
     ensures found == exists|i: int| 0 <= i < executed.len() && #[trigger] executed@[i].status@ == "error"@,
 {
