@@ -302,12 +302,16 @@ fn execute(
 
 #[cfg(not(verus_keep_ghost))]
 fn reported_coverage_cause(bytes: &[u8], complete: bool) -> Option<&str> {
-    bytes.split(|&byte| byte == b'\n').find_map(|line| {
+    verified_state::first_coverage_line(bytes, complete, |start, end| {
+        let line = &bytes[start..end];
         let line = std::str::from_utf8(line.strip_suffix(b"\r").unwrap_or(line)).ok()?;
         let (code, detail) = line.split_once(": ")?;
-        (verified_state::report_coverage_cause(complete, code, detail.len())
-            && !detail.trim().is_empty()
-            && !detail.chars().any(char::is_control))
+        verified_state::coverage_detail(
+            code,
+            detail.len(),
+            || !detail.trim().is_empty(),
+            || detail.chars().any(char::is_control),
+        )
         .then_some(line)
     })
 }
@@ -338,56 +342,38 @@ fn execute_operation(
         let process = state.as_ref().unwrap().execute(&spec, &tool.sha256)?;
         Receipt::observe(plan, op, process, runner)
     })();
-    let (receipt, error, status) = match result {
-        Ok(receipt) => {
-            let infrastructure = routes
-                .check_receipt(plan, op, &receipt)
-                .err()
-                .or_else(|| receipt.process.failure.clone());
-            let (error, status) = if let Some(error) = infrastructure {
-                (Some(error), "error")
-            } else if receipt.process.exit_code != 0 {
-                let process = &receipt.process;
-                let exit = format!("operation exit {}", process.exit_code);
-                let cause = reported_coverage_cause(&process.stderr_bytes, process.stderr_complete)
-                    .or_else(|| {
-                        reported_coverage_cause(&process.stdout_bytes, process.stdout_complete)
-                    });
-                let message = match cause {
-                    Some(line) => format!("{line} ({exit})"),
-                    None => exit,
-                };
-                (Some(message), "failed")
-            } else {
-                (None, "passed")
-            };
-            (Some(receipt), error, status)
-        }
-        Err(e) => (None, Some(e), "error"),
-    };
-    let mut row = OperationResult {
-        operation: op.method.operation.clone(),
-        status: status.into(),
-        receipt,
-        error,
-        original: None,
-    };
-    if let Some(state) = state {
-        match state.finish(&row) {
-            Ok(original) => row.original = Some(original),
-            Err(error) => {
-                row.error = Some(format!(
-                    "{}operation original publication: {error}",
-                    row.error
-                        .as_ref()
-                        .map(|e| format!("{e}; "))
-                        .unwrap_or_default()
-                ));
-                row.status = "error".into();
+    let row = verified_state::operation_result(
+        op.method.operation.clone(),
+        result,
+        |receipt| {
+            (
+                routes.check_receipt(plan, op, receipt),
+                receipt.process.failure.clone(),
+                receipt.process.exit_code,
+            )
+        },
+        |receipt, code| {
+            let process = &receipt.process;
+            let exit = format!("operation exit {code}");
+            let cause = verified_state::preferred_diagnostic(
+                reported_coverage_cause(&process.stderr_bytes, process.stderr_complete),
+                || reported_coverage_cause(&process.stdout_bytes, process.stdout_complete),
+            );
+            match cause {
+                Some(line) => format!("{line} ({exit})"),
+                None => exit,
             }
-        }
+        },
+    );
+    if let Some(state) = state {
+        let original = state.finish(&row);
+        verified_state::published_operation(row, original, |previous, error| match previous {
+            Some(previous) => format!("{previous}; operation original publication: {error}"),
+            None => format!("operation original publication: {error}"),
+        })
+    } else {
+        row
     }
-    row
 }
 /// Validate the caller's affected pairs in a fixed project registry.
 #[cfg(not(verus_keep_ghost))]

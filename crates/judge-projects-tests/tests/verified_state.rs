@@ -491,6 +491,103 @@ fn whole_report_distinguishes_blocked_failed_error_and_unselected_tests()
 }
 
 #[cfg(verus_keep_ghost)]
+fn receipt_replies_and_operation_rows_preserve_the_actual_reason(
+    id: String, other: String, check: Result<(), String>, failure: Option<String>, exit: i32,
+    message: String, publish: Result<u8, String>,
+)
+    requires id@ != other@,
+{
+    let good = state::receipt_reply(id.as_str(),id.as_str(),id.as_str(),id.as_str(),Ok(None));
+    assert(good.is_ok());
+    let mismatch = state::receipt_reply(id.as_str(),id.as_str(),id.as_str(),other.as_str(),Ok(Some(message.clone())));
+    assert(mismatch matches Err(s) && s@ == "E_RECEIPT_MISMATCH: routes response refers to another plan or operation"@);
+    let invalid = state::receipt_reply(id.as_str(),id.as_str(),id.as_str(),id.as_str(),Err(()));
+    assert(invalid matches Err(s) && s@ == "E_RECEIPT_MISMATCH: invalid receipt comparison"@);
+    let schema = state::receipt_reply(id.as_str(),id.as_str(),id.as_str(),id.as_str(),Ok(Some(message.clone())));
+    assert(schema == Err::<(),String>(message));
+    let inspect = |_r: &u8| -> (v: (Result<(),String>,Option<String>,i32))
+        ensures v == (check,failure,exit),
+    { (check, failure, exit) };
+    let diagnose = |_r: &u8,_code: i32| -> (v: String) ensures v@ == message@, { message.clone() };
+    let row: state::OperationRow<u8,u8> = state::operation_result(id.clone(),Ok(3u8),inspect,diagnose);
+    assert(row.operation == id && row.receipt == Some(3u8) && row.original.is_none());
+    proof {
+        let o = choose|o: (Result<(),String>,Option<String>,i32)|
+            #[trigger] inspect.ensures((&3u8,), o) && match (o.0,o.1) {
+                (Err(e),_) | (Ok(()),Some(e)) => row.status@ == "error"@ && row.error == Some(e),
+                (Ok(()),None) => if o.2 == 0 { row.status@ == "passed"@ && row.error.is_none() }
+                    else { row.status@ == "failed"@ && (row.error matches Some(e)
+                           && diagnose.ensures((&3u8,o.2), e)) },
+            };
+        assert(o == (check,failure,exit));
+        if check.is_ok() && failure.is_none() && exit != 0 {
+            assert(row.error.is_some());
+            assert(diagnose.ensures((&3u8,exit),row.error.unwrap()));
+            assert(row.error.unwrap()@ == message@);
+        }
+    }
+    assert(match check {
+        Err(e) => row.status@ == "error"@ && row.error == Some(e),
+        Ok(()) => match failure {
+            Some(e) => row.status@ == "error"@ && row.error == Some(e),
+            None => if exit == 0 { row.status@ == "passed"@ && row.error.is_none() }
+                else { row.status@ == "failed"@ && (row.error matches Some(e) && e@ == message@) },
+        },
+    });
+    let describe = |previous: Option<String>, e: String| -> (text: String)
+        ensures text == if previous.is_some() { previous.unwrap() } else { e },
+    { match previous { Some(old) => old, None => e } };
+    let ghost before = row;
+    let ghost retained = publish;
+    let out = state::published_operation(row,publish,describe);
+    assert(out.receipt == Some(3u8) && out.operation == id);
+    proof { match retained {
+        Ok(file) => { assert(out.original == Some(file) && out.status == before.status && out.error == before.error); },
+        Err(error) => { assert(out.status@ == "error"@ && out.original.is_none()
+            && out.error == if before.error.is_some() { before.error } else { Some(error) }); },
+    } }
+}
+
+#[cfg(verus_keep_ghost)]
+fn coverage_stream_selection_observes_order_bounds_and_completeness() {
+    let bytes: [u8;5] = [65u8,10u8,66u8,10u8,67u8];
+    assert(bytes@ =~= seq![65u8,10u8,66u8,10u8,67u8]);
+    let inspect = |a: usize,b: usize| -> (v: Option<usize>)
+        ensures v == if a == 0 { None } else { Some(a) },
+    { if a == 0 { None } else { Some(a) } };
+    let incomplete = state::first_coverage_line(&bytes,false,inspect);
+    assert(incomplete.is_none());
+    let observed = state::first_coverage_line(&bytes,true,inspect);
+    assert(state::whole_line(bytes@,2,3));
+    assert forall|a: usize,b: usize| state::whole_line(bytes@,a as int,b as int)
+        implies (a == 0 || a == 2 || a == 4) by {};
+    proof {
+        if let Some(value) = observed {
+            let (a,b) = choose|a: usize,b: usize| state::whole_line(bytes@,a as int,b as int)
+                && #[trigger] inspect.ensures((a,b),Some(value))
+                && forall|i: usize,j: usize| i < a && state::whole_line(bytes@,i as int,j as int)
+                    ==> #[trigger] inspect.ensures((i,j),None);
+            if a > 2 { assert(inspect.ensures((2usize,3usize),None)); }
+            assert(a == 2);
+            assert(inspect.ensures((a,b),Some(value)));
+        } else {
+            assert(inspect.ensures((2usize,3usize),None));
+        }
+    }
+    assert(observed == Some(2usize));
+    let alternate = || -> (v: Option<usize>) ensures v == Some(7usize), { Some(7usize) };
+    let err = state::preferred_diagnostic(observed,alternate);
+    let fallback = state::preferred_diagnostic(incomplete,alternate);
+    assert(err == Some(2usize) && fallback == Some(7usize));
+    let yes = || -> (r: bool) ensures r, { true };
+    let no = || -> (r: bool) ensures !r, { false };
+    let valid = state::coverage_detail("E_VERUS_COVERAGE",1024,yes,no);
+    let space = state::coverage_detail("E_VERUS_COVERAGE",1,no,no);
+    let control = state::coverage_detail("E_VERUS_COVERAGE",9,yes,yes);
+    assert(valid && !space && !control);
+}
+
+#[cfg(verus_keep_ghost)]
 fn prerequisite_and_test_outcomes_use_only_the_named_operations(
     first: String, second: String, foreign: String, test: String, other: String, failure: String,
 )

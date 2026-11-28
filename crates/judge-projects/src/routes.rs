@@ -377,16 +377,18 @@ impl<'a> Routes<'a> {
         let reply: Reply =
             serde_json::from_value(self.query("check-operation-receipt-v1", &original)?)
                 .map_err(|error| error.to_string())?;
-        if reply.plan != plan.identity || reply.operation != operation.method.operation {
-            return Err(
-                "E_RECEIPT_MISMATCH: routes response refers to another plan or operation".into(),
-            );
-        }
-        match reply.error {
-            Value::Null => Ok(()),
-            Value::String(reason) => Err(reason),
-            _ => Err("E_RECEIPT_MISMATCH: invalid receipt comparison".into()),
-        }
+        let error = match reply.error {
+            Value::Null => Ok(None),
+            Value::String(reason) => Ok(Some(reason)),
+            _ => Err(()),
+        };
+        crate::verified_state::receipt_reply(
+            &reply.plan,
+            &plan.identity,
+            &reply.operation,
+            &operation.method.operation,
+            error,
+        )
     }
     pub fn binding(&self, req: &crate::wire::Request, effective: &Value) -> Result<Value, String> {
         let reply = self.query(
