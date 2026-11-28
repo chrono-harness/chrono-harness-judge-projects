@@ -33,6 +33,66 @@ mod impact_summary;
 
 verus! {
 #[cfg(verus_keep_ghost)]
+fn duplicate_or_unknown_reports_do_not_consume_a_second_unit(unit: &String, other: &String)
+    requires unit != other, vstd::laws_cmp::obeys_cmp::<String>(),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut seen = std::collections::BTreeSet::new();
+    let accepted = state::admit_report_unit(&mut seen, unit, true, true);
+    let duplicate = state::admit_report_unit(&mut seen, unit, true, true);
+    let unknown = state::admit_report_unit(&mut seen, other, false, true);
+    let bad_digest = state::admit_report_unit(&mut seen, other, true, false);
+    let required = [unit.clone(), other.clone()];
+    let partial = state::required_units_present(&required, &seen);
+    let second = state::admit_report_unit(&mut seen, other, true, true);
+    let complete = state::required_units_present(&required, &seen);
+    assert(accepted && !duplicate && !unknown && !bad_digest && !partial && second && complete);
+}
+
+#[cfg(verus_keep_ghost)]
+fn report_limit_and_tool_observation_boundaries() {
+    let ceiling = 64 * 1024 * 1024;
+    let maximum = state::collection_limit(Some(ceiling));
+    let over_maximum = state::collection_limit(Some(ceiling + 1));
+    let zero = state::collection_limit(Some(0));
+    let missing = state::collection_limit(None);
+    let exact = state::within_collection_bound(109, 109);
+    let beyond = state::within_collection_bound(110, 109);
+    let first = state::consistent_observation(None);
+    let repeated = state::consistent_observation(Some(true));
+    let replaced = state::consistent_observation(Some(false));
+    assert(maximum == Some(ceiling) && over_maximum.is_none() && zero.is_none() && missing.is_none());
+    assert(exact && !beyond && first && repeated && !replaced);
+}
+
+#[cfg(verus_keep_ghost)]
+fn completed_collection_requires_each_original_projection(fields: state::project_dispatch::CompletionProjection)
+    requires !fields.warnings || !fields.removal_sources || !fields.test_sources
+        || !fields.required_units_present || !fields.required_units || !fields.tests || !fields.tools,
+{
+    let mismatched = state::project_dispatch::completed_originals(
+        "chrono-collected-completion/v1", "passed", Some("collect"), "plan", "plan", 0, 0, fields,
+    );
+    assert(!mismatched);
+    let original = state::project_dispatch::completed_originals(
+        "chrono-collected-completion/v1", "passed", Some("collect"), "plan", "plan", 0, 0,
+        state::project_dispatch::CompletionProjection {
+            selected: true, removed: true, warnings: true, test_sources: true,
+            removal_sources: true, required_units_present: true, required_units: true,
+            global_selected: true, tests: true, tools: true,
+        },
+    );
+    assert(original);
+}
+
+#[cfg(verus_keep_ghost)]
+fn runner_uses_registered_program_or_default(path: &str) {
+    let configured = state::project_dispatch::runner_program(Some(path));
+    let default = state::project_dispatch::runner_program(None);
+    assert(configured@ == path@ && default@ == "chrono-harness"@);
+}
+
+#[cfg(verus_keep_ghost)]
 fn registry_pairs_keep_first_match_exclusivity_and_literal_prefix<T: state::pair_checks::RegistryColumns>(
     table: &T, key: &[&str], a: usize, b: usize,
 )
