@@ -490,6 +490,63 @@ fn whole_report_distinguishes_blocked_failed_error_and_unselected_tests()
     assert(!extra_failed);
 }
 
+#[cfg(verus_keep_ghost)]
+fn prerequisite_and_test_outcomes_use_only_the_named_operations(
+    first: String, second: String, foreign: String, test: String, other: String, failure: String,
+)
+    requires vstd::laws_cmp::obeys_cmp::<String>(), first != second, first != foreign,
+        second != foreign, test != other, failure@ != "passed"@,
+{
+    use state::Prerequisites::{Blocked, Passed, Waiting};
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut statuses = std::collections::BTreeMap::new();
+    let mut tests = std::collections::BTreeMap::new();
+    let empty: [String; 0] = [];
+    let required = [first.clone(), second.clone(), first.clone()];
+    let mut predecessors = std::collections::BTreeSet::new();
+    let observed = state::prerequisite_status(&predecessors, &statuses);
+    assert(observed == Passed);
+    predecessors.insert(first.clone());
+    predecessors.insert(second.clone());
+    let shared = [first.clone()];
+    assert(required@ =~= seq![first, second, first]);
+    assert(shared@ =~= seq![first]);
+    assert(predecessors@ =~= set![first, second]);
+    assert(predecessors@.contains(first) && predecessors@.contains(second));
+    statuses.insert(foreign.clone(), failure.clone());
+    assert(!statuses@.contains_key(first) && !statuses@.contains_key(second));
+    state::record_executed_test(&mut tests, &other, &empty, &statuses);
+    assert(tests@[other]@ == "passed"@);
+    let observed = state::prerequisite_status(&predecessors, &statuses);
+    assert(!state::selected_test_passed(statuses@, first) && predecessors@.contains(first));
+    assert forall|id: String| #[trigger] predecessors@.contains(id) implies
+        (!statuses@.contains_key(id) || state::selected_test_passed(statuses@, id)) by {
+        assert(id == first || id == second);
+    }
+    assert(observed == Waiting);
+    statuses.insert(second.clone(), failure.clone());
+    assert(statuses@[second]@ != "passed"@ && predecessors@.contains(second));
+    let observed = state::prerequisite_status(&predecessors, &statuses);
+    assert(observed == Blocked);
+    state::record_executed_test(&mut tests, &test, &required, &statuses);
+    assert(tests@[test]@ == "failed"@ && tests@[other]@ == "passed"@);
+    statuses.insert(second.clone(), "passed".to_string());
+    let observed = state::prerequisite_status(&predecessors, &statuses);
+    assert(!state::selected_test_passed(statuses@, first) && predecessors@.contains(first));
+    assert forall|id: String| #[trigger] predecessors@.contains(id) implies
+        (!statuses@.contains_key(id) || state::selected_test_passed(statuses@, id)) by {
+        assert(id == first || id == second);
+    }
+    assert(observed == Waiting);
+    state::record_executed_test(&mut tests, &other, &shared, &statuses);
+    assert(tests@[other]@ == "failed"@ && tests@[test]@ == "failed"@);
+    statuses.insert(first.clone(), "passed".to_string());
+    let observed = state::prerequisite_status(&predecessors, &statuses);
+    assert(observed == Passed);
+    state::record_executed_test(&mut tests, &test, &required, &statuses);
+    assert(tests@[test]@ == "passed"@ && tests@[other]@ == "failed"@);
+}
+
 fn selected_outcome_covers_only_the_selected_ids()
     requires vstd::laws_cmp::obeys_cmp::<String>(),
 {

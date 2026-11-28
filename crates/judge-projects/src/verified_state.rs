@@ -155,6 +155,80 @@ pub fn uncovered_test<'a>(
     None
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Prerequisites { Passed, Waiting, Blocked }
+
+/// Missing predecessors can still complete. Any known unsuccessful predecessor
+/// blocks the operation, including when an earlier predecessor is missing.
+pub fn prerequisite_status(ids: &BTreeSet<String>, statuses: &BTreeMap<String, String>)
+    -> (out: Prerequisites)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures
+        (out == Prerequisites::Blocked) == (exists|id: String| #[trigger] ids@.contains(id)
+            && statuses@.contains_key(id) && !selected_test_passed(statuses@, id)),
+        (out == Prerequisites::Passed) == (forall|id: String| #[trigger] ids@.contains(id)
+            ==> selected_test_passed(statuses@, id)),
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let mut iter = ids.iter();
+    let mut missing = false;
+    loop
+        invariant vstd::laws_cmp::obeys_cmp::<String>(),
+            iter@.1.to_set() == ids@, 0 <= iter@.0 <= iter@.1.len(),
+            missing == (exists|j: int| 0 <= j < iter@.0 && !statuses@.contains_key(#[trigger] iter@.1[j])),
+            forall|j: int| 0 <= j < iter@.0 && statuses@.contains_key(#[trigger] iter@.1[j])
+                ==> selected_test_passed(statuses@, iter@.1[j]),
+        decreases iter@.1.len() - iter@.0,
+    {
+        let Some(id) = iter.next() else {
+            assert forall|id: String| #[trigger] ids@.contains(id)
+                implies (!statuses@.contains_key(id) || selected_test_passed(statuses@, id)) by {
+                assert(iter@.1.contains(id));
+                let j = choose|j: int| 0 <= j < iter@.1.len() && iter@.1[j] == id;
+                assert(iter@.1[j] == id);
+            }
+            assert(missing == (exists|id: String| #[trigger] ids@.contains(id) && !statuses@.contains_key(id))) by {
+                if missing {
+                    let j = choose|j: int| 0 <= j < iter@.0 && !statuses@.contains_key(#[trigger] iter@.1[j]);
+                    assert(ids@.contains(iter@.1[j]));
+                } else {
+                    assert forall|id: String| #[trigger] ids@.contains(id) implies statuses@.contains_key(id) by {
+                        assert(iter@.1.contains(id));
+                        let j = choose|j: int| 0 <= j < iter@.1.len() && iter@.1[j] == id;
+                        assert(statuses@.contains_key(iter@.1[j]));
+                    }
+                }
+            }
+            return if missing { Prerequisites::Waiting } else { Prerequisites::Passed };
+        };
+        assert(iter@.1[iter@.0 - 1] == *id);
+        match statuses.get(id) {
+            None => { missing = true; },
+            Some(s) => {
+                if !<&str>::exec_eq(s.as_str(), "passed") {
+                    assert(ids@.contains(*id));
+                    return Prerequisites::Blocked;
+                }
+            },
+        }
+    }
+}
+
+/// Record one test's actual operations, preserving all other selected tests.
+pub fn record_executed_test(tests: &mut BTreeMap<String, String>, test: &String,
+    operations: &[String], statuses: &BTreeMap<String, String>)
+    requires vstd::laws_cmp::obeys_cmp::<String>(),
+    ensures tests@.dom() == old(tests)@.dom().insert(*test),
+        tests@[*test]@ == if forall|i: int| 0 <= i < operations.len()
+            ==> selected_test_passed(statuses@, #[trigger] operations@[i]) { "passed"@ } else { "failed"@ },
+        forall|other: String| other != *test && old(tests)@.contains_key(other)
+            ==> #[trigger] tests@[other] == old(tests)@[other],
+{
+    broadcast use vstd::std_specs::btree::group_btree_axioms;
+    let status = if uncovered_test(operations, statuses).is_none() { "passed" } else { "failed" };
+    tests.insert(test.clone(), status.to_string());
+}
+
 /// A collected original can preserve an explicit retirement without a replacement.
 /// Live and first-time collection require a registered downstream validator for that case.
 pub fn declared_removal<'a>(
