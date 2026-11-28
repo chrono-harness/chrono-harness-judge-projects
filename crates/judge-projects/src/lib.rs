@@ -166,11 +166,9 @@ fn execute(
                     continue;
                 }
                 let op = &plan.operations[index];
-                if op
-                    .predecessors
-                    .iter()
-                    .any(|id| statuses.get(id).is_some_and(|s| s != "passed"))
-                {
+                let prerequisites =
+                    verified_state::prerequisite_status(&op.predecessors, &statuses);
+                if prerequisites == verified_state::Prerequisites::Blocked {
                     tracing::info!(
                         event_id = "projects.operation_blocked",
                         operation = op.method.operation,
@@ -192,7 +190,7 @@ fn execute(
                 if !can_dispatch(
                     running.len(),
                     dispatch.max_running.get(),
-                    || op.predecessors.iter().any(|id| !statuses.contains_key(id)),
+                    || prerequisites == verified_state::Prerequisites::Waiting,
                     || {
                         plan.scheduling.as_ref().is_some_and(|policy| {
                             running.iter().any(|i: &usize| {
@@ -296,18 +294,7 @@ fn execute(
         }
     }
     for (test, p) in &plan.selected {
-        results.tests.insert(
-            test.clone(),
-            if p.operations
-                .iter()
-                .all(|id| statuses.get(id).map(String::as_str) == Some("passed"))
-            {
-                "passed"
-            } else {
-                "failed"
-            }
-            .into(),
-        );
+        verified_state::record_executed_test(&mut results.tests, test, &p.operations, &statuses);
     }
     state.finish(&mut results)?;
     Ok(results)
