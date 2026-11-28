@@ -33,6 +33,96 @@ mod impact_summary;
 
 verus! {
 #[cfg(verus_keep_ghost)]
+fn registry_pairs_keep_first_match_exclusivity_and_literal_prefix<T: state::pair_checks::RegistryColumns>(
+    table: &T, key: &[&str], a: usize, b: usize,
+)
+    requires a < b < table.height(),
+        state::pair_checks::matches_columns(table,a as int,key@),
+        state::pair_checks::matches_columns(table,b as int,key@),
+        forall|i:int| 0 <= i < a ==> !#[trigger] state::pair_checks::matches_columns(table,i,key@),
+{
+    let first = state::pair_checks::lookup_row(table,key,false);
+    let unique = state::pair_checks::lookup_row(table,key,true);
+    assert(first == Some(a));
+    assert(unique.is_none());
+    let exact = state::pair_checks::path_prefix(&[97,98], &[97,98]);
+    let nested = state::pair_checks::path_prefix(&[97,98,99], &[97,98]);
+    let reversed = state::pair_checks::path_prefix(&[97], &[97,98]);
+    let other = state::pair_checks::path_prefix(&[97,99], &[97,98]);
+    assert(exact && nested && !reversed && !other);
+}
+
+#[cfg(verus_keep_ghost)]
+fn absent_and_unique_registry_rows<T: state::pair_checks::RegistryColumns>(table: &T, key: &[&str], row: usize)
+    requires row < table.height(), state::pair_checks::matches_columns(table,row as int,key@),
+        forall|i:int| 0 <= i < table.height() && i != row ==> !#[trigger] state::pair_checks::matches_columns(table,i,key@),
+{
+    let unique = state::pair_checks::lookup_row(table,key,true);
+    assert(unique == Some(row));
+    let project = state::pair_checks::owner_key("project","x");
+    let script = state::pair_checks::owner_key("script","x");
+    proof { reveal_strlit("project"); reveal_strlit("script"); reveal_strlit(":"); reveal_strlit("x"); }
+    assert(project@.len() == 9 && script@.len() == 8);
+}
+
+#[cfg(verus_keep_ghost)]
+fn collector_binds_manifest_header_pins_sources_and_unit_plan(valid: &str, other: &str)
+    requires valid@ != other@,
+{
+    use state::project_dispatch::*;
+    let full = collection_manifest("chrono-full-collection/v1");
+    let ci = collection_manifest("chrono-ci-collection/v1");
+    let both = executable_pins(Some(valid),Some(valid),valid,Some(valid));
+    let absent = executable_pins(None,None,valid,None);
+    let no_judge = executable_pins(None,Some(valid),valid,None);
+    let wrong_runner = executable_pins(Some(other),None,valid,None);
+    let wrong_judge = executable_pins(None,Some(other),valid,Some(valid));
+    assert(full && ci && both && absent && !no_judge && !wrong_runner && !wrong_judge);
+    let fields = [Some(valid),Some(valid),Some(valid),Some(valid),Some(valid)];
+    let header = report_identity(fields,UnitIdentity {base:valid,candidate:valid,tree:valid,registry:valid,context:valid});
+    let wrong_tree = report_identity(fields,UnitIdentity {base:valid,candidate:valid,tree:other,registry:valid,context:valid});
+    let missing = source_bound(Some(valid),None,Some(valid),valid,valid,valid);
+    let wrong_source = source_bound(Some(valid),Some(valid),Some(other),valid,valid,valid);
+    let source = source_bound(Some(valid),Some(valid),Some(valid),valid,valid,valid);
+    assert(header && !wrong_tree && !missing && !wrong_source && source);
+    let observed = tool_input(true,Some(valid),|| -> (r:Option<&str>) ensures r == Some(valid) { Some(valid) },valid);
+    let bad_file = tool_input(true,Some(valid),|| -> (r:Option<&str>) ensures r == Some(other) { Some(other) },valid);
+    let bad_declaration = tool_input(true,Some(other),|| -> (r:Option<&str>) ensures r == Some(valid) { Some(valid) },valid);
+    assert(observed && !bad_file && !bad_declaration);
+    proof { reveal_strlit("unit:"); reveal_strlit("u"); reveal_strlit("unit:u"); assert("unit:u"@ =~= "unit:"@ + "u"@); }
+    let unit = unit_plan_receipt(valid,valid,Some("unit:u"),"u",false,0,2,2);
+    let stale = unit_plan_receipt(valid,other,Some("unit:u"),"u",false,0,2,2);
+    let partial = unit_plan_receipt(valid,valid,Some("unit:u"),"u",false,0,1,2);
+    assert(unit && !stale && !partial);
+}
+
+#[cfg(verus_keep_ghost)]
+fn only_one_successful_operation_can_supply_a_collection_receipt(id: &str) {
+    let a = state::OperationRow {operation:id.to_string(),status:"passed".to_string(),
+        receipt:Some(7u8),error:None,original:None::<u8>};
+    let b = state::OperationRow {operation:id.to_string(),status:"passed".to_string(),
+        receipt:Some(8u8),error:None,original:None::<u8>};
+    let one = [a];
+    let accepted = state::operation_receipt(&one,id,Some(true));
+    let missing_route = state::operation_receipt(&one,id,None);
+    assert(one@.len() == 1 && one@[0].operation@ == id@ && one@[0].status@ == "passed"@ && one@[0].receipt == Some(7u8) && one@[0].error.is_none());
+    assert(accepted matches Some(v) && *v == 7u8);
+    assert(missing_route.is_none());
+    let a2 = state::OperationRow {operation:id.to_string(),status:"passed".to_string(),
+        receipt:Some(7u8),error:None,original:None::<u8>};
+    let two = [a2,b];
+    let ambiguous = state::operation_receipt(&two,id,Some(true));
+    assert(two@.len() == 2 && two@[0].operation@ == id@ && two@[1].operation@ == id@);
+    proof { if let Some(r) = ambiguous {
+        let i = choose|i:int| 0 <= i < two.len() && #[trigger] two@[i].operation@ == id@ && two@[i].status@ == "passed"@
+            && two@[i].error.is_none() && two@[i].receipt == Some(*r)
+            && (forall|j:int| 0 <= j < two.len() && j != i ==> #[trigger] two@[j].operation@ != id@);
+        if i == 0 { assert(two@[1].operation@ == id@); } else { assert(two@[0].operation@ == id@); }
+    } }
+    assert(ambiguous.is_none());
+}
+
+#[cfg(verus_keep_ghost)]
 fn native_query_names_match_only_with_their_complete_argument_count() {
     proof {
         reveal_strlit("--protocol");
