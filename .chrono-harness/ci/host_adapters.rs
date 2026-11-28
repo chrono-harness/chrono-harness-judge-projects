@@ -53,6 +53,11 @@ pub fn installed_pattern(is_version: bool) -> (pattern: &'static str)
     if is_version { "^[0-9]+[.][0-9]+[.][0-9]+(-[A-Za-z0-9-]+([.][A-Za-z0-9-]+)*)?$" } else { "^sha256:[a-f0-9]{64}$" }
 }
 
+/// Bind the native check to this host's registered proof compilation.
+pub fn native_check_script() -> &'static str {
+    include_str!("../../check.sh")
+}
+
 pub fn installed_config() -> (s: &'static str) {
     include_str!("../../.config/mise/conf.d/selected-chrono-harness.toml")
 }
@@ -94,6 +99,16 @@ pub fn roadmap_matches(script: &String, workflow: &String) -> (accepted: bool)
 mod native {
     use super::*;
     use serde_yaml::Value;
+
+    #[test]
+    fn native_check_selects_the_cargo_library_before_checking_its_sources() {
+        let script = native_check_script();
+        let selector = r#"chrono-host-bootstrap select-native-cargo-library "$(pwd -P)/$product" "$scratch/build.jsonl""#;
+        let source_check = r#"chrono-host-bootstrap check-compiler-sources native "$stem""#;
+        let selection = script.find(selector).expect("registered Cargo selector");
+        let verification = script.find(source_check).expect("registered source check");
+        assert!(selection < verification);
+    }
 
     #[test]
     fn deployed_tool_installer_matches_the_selected_template() {
